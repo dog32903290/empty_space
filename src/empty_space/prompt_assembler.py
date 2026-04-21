@@ -6,6 +6,7 @@ user message is verbatim dialogue history with no tail anchor.
 from empty_space.schemas import (
     InitialState,
     Persona,
+    RetrievedImpression,
     Setting,
     Turn,
 )
@@ -34,6 +35,8 @@ def build_system_prompt(
     scene_premise: str | None,
     initial_state: InitialState,
     active_events: list[tuple[int, str]],
+    prelude: str | None = None,
+    retrieved_impressions: list[RetrievedImpression] | None = None,
     ambient_echo: list[str] | None = None,
 ) -> str:
     """Assemble the system prompt for one role's turn.
@@ -66,6 +69,16 @@ def build_system_prompt(
         )
         scene_parts.append(f"### 已發生的事\n{event_lines}")
     blocks.append("## 現場\n" + "\n\n".join(scene_parts))
+
+    # Level 2: 你的內在 block — conditionally added
+    inner_parts: list[str] = []
+    if prelude:
+        inner_parts.append(prelude.rstrip())
+    if retrieved_impressions:
+        recall_lines = ["你可能想起的："] + [f"- {imp.text}" for imp in retrieved_impressions]
+        inner_parts.append("\n".join(recall_lines))
+    if inner_parts:
+        blocks.append("## 你的內在\n" + "\n\n".join(inner_parts))
 
     blocks.append(f"## 輸出格式\n{_OUTPUT_FORMAT_INSTRUCTION}")
 

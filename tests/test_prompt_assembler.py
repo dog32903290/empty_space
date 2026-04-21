@@ -266,3 +266,140 @@ def test_user_message_has_no_tail_anchor_or_instruction():
     assert "說第" not in msg
     assert "你是" not in msg
     assert msg.endswith("嗯。")
+
+
+# --- Level 2: 你的內在 block ---
+
+from empty_space.schemas import RetrievedImpression
+
+
+def _make_retrieved(text: str, speaker: str = "counterpart") -> RetrievedImpression:
+    return RetrievedImpression(
+        id="imp_001",
+        text=text,
+        symbols=("x",),
+        speaker=speaker,  # type: ignore[arg-type]
+        persona_name="兒子",
+        from_run="r/t",
+        from_turn=1,
+        score=1,
+        matched_symbols=("x",),
+    )
+
+
+def test_system_prompt_omits_inner_block_when_no_prelude_and_no_retrieved(
+    mother_persona, son_persona, hospital_setting, initial_state,
+):
+    prompt = build_system_prompt(
+        persona=mother_persona,
+        counterpart_name=son_persona.name,
+        setting=hospital_setting,
+        scene_premise=None,
+        initial_state=initial_state,
+        active_events=[],
+        prelude=None,
+        retrieved_impressions=[],
+    )
+    assert "## 你的內在" not in prompt
+
+
+def test_system_prompt_inner_block_with_only_prelude(
+    mother_persona, son_persona, hospital_setting, initial_state,
+):
+    prompt = build_system_prompt(
+        persona=mother_persona,
+        counterpart_name=son_persona.name,
+        setting=hospital_setting,
+        scene_premise=None,
+        initial_state=initial_state,
+        active_events=[],
+        prelude="你昨夜夢到他小時候被帶走。",
+        retrieved_impressions=[],
+    )
+    assert "## 你的內在" in prompt
+    assert "你昨夜夢到他小時候被帶走。" in prompt
+    assert "你可能想起的：" not in prompt
+
+
+def test_system_prompt_inner_block_with_only_retrieved(
+    mother_persona, son_persona, hospital_setting, initial_state,
+):
+    prompt = build_system_prompt(
+        persona=mother_persona,
+        counterpart_name=son_persona.name,
+        setting=hospital_setting,
+        scene_premise=None,
+        initial_state=initial_state,
+        active_events=[],
+        prelude=None,
+        retrieved_impressions=[
+            _make_retrieved("她的沉默在這一刻比任何辯解都沉"),
+            _make_retrieved("他看著鞋帶不看她的眼"),
+        ],
+    )
+    assert "## 你的內在" in prompt
+    assert "你可能想起的：" in prompt
+    assert "- 她的沉默在這一刻比任何辯解都沉" in prompt
+    assert "- 他看著鞋帶不看她的眼" in prompt
+
+
+def test_system_prompt_inner_block_with_both_prelude_and_retrieved(
+    mother_persona, son_persona, hospital_setting, initial_state,
+):
+    prompt = build_system_prompt(
+        persona=mother_persona,
+        counterpart_name=son_persona.name,
+        setting=hospital_setting,
+        scene_premise=None,
+        initial_state=initial_state,
+        active_events=[],
+        prelude="你昨夜夢到他小時候被帶走。",
+        retrieved_impressions=[_make_retrieved("她的沉默比辯解都沉")],
+    )
+    assert "## 你的內在" in prompt
+    assert "你昨夜夢到他小時候被帶走。" in prompt
+    assert "你可能想起的：" in prompt
+    assert "- 她的沉默比辯解都沉" in prompt
+    # prelude should come before retrieved within the block
+    prelude_pos = prompt.find("你昨夜夢到他小時候被帶走。")
+    recall_pos = prompt.find("你可能想起的：")
+    assert 0 <= prelude_pos < recall_pos
+
+
+def test_system_prompt_inner_block_position_after_xianchang(
+    mother_persona, son_persona, hospital_setting, initial_state,
+):
+    prompt = build_system_prompt(
+        persona=mother_persona,
+        counterpart_name=son_persona.name,
+        setting=hospital_setting,
+        scene_premise="父親 ICU。",
+        initial_state=initial_state,
+        active_events=[],
+        prelude="你在想他。",
+        retrieved_impressions=[],
+    )
+    # Order: 貫通軸 → 關係層 → 此刻 → 現場 → 你的內在 → 輸出格式
+    assert prompt.index("## 現場") < prompt.index("## 你的內在")
+    assert prompt.index("## 你的內在") < prompt.index("## 輸出格式")
+
+
+def test_system_prompt_retrieved_impressions_rendered_as_bullet_list(
+    mother_persona, son_persona, hospital_setting, initial_state,
+):
+    prompt = build_system_prompt(
+        persona=mother_persona,
+        counterpart_name=son_persona.name,
+        setting=hospital_setting,
+        scene_premise=None,
+        initial_state=initial_state,
+        active_events=[],
+        prelude=None,
+        retrieved_impressions=[
+            _make_retrieved("印象一"),
+            _make_retrieved("印象二"),
+            _make_retrieved("印象三"),
+        ],
+    )
+    # Exact bullet format
+    assert "你可能想起的：\n- 印象一\n- 印象二\n- 印象三" in prompt
