@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+runs/
+ledgers/
+.pytest_cache/
+*.egg-info/
+dist/
+.DS_Store
+uv.lock.backup
