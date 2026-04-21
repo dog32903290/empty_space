@@ -12,6 +12,13 @@ scene_premise: |
   他們在同一家醫院。父親在 ICU，剛被告知可能撐不過今晚。
   母親和兒子在病房外走廊的長椅上。這是他們十幾年來第一次在同一個空間。
 
+protagonist_prelude: |
+  你昨夜夢到他小時候被帶走。醒來時枕頭是濕的。
+
+counterpart_prelude: |
+  你昨晚和女朋友分手。她說「我不能等你。」
+  你還沒跟任何人說。
+
 initial_state:
   verb: 承受（靠近）
   stage: 前置積累
