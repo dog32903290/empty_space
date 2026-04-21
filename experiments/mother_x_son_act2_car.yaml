@@ -1,0 +1,34 @@
+exp_id: mother_x_son_act2_car
+protagonist:
+  path: 六個劇中人/母親
+  version: v3_tension
+counterpart:
+  path: 六個劇中人/兒子
+  version: v3_tension
+setting:
+  path: 六個劇中人/環境_車上.yaml
+
+scene_premise: |
+  父親走了。凌晨。他們離開 ICU 後上了兒子的車。
+  母親坐副駕。沒有明確目的地，只是先離開那裡。
+  車窗外的天還沒亮。
+
+protagonist_prelude: |
+  你在走廊坐了整個早上。你的外套上還有消毒水的味道。
+  他開車載你離開了，但你不知道他要帶你去哪，你也不想問。
+
+counterpart_prelude: |
+  你握著方向盤。父親走了，你以為會有感覺，但什麼都沒有。
+  你還沒告訴她昨晚女朋友跟你分手的事。你也不知道為什麼想告訴她。
+
+initial_state:
+  verb: 承受（並行）
+  stage: 餘震
+  mode: 封閉
+
+director_events: {}
+
+max_turns: 8
+termination:
+  on_fire_release: true
+  on_basin_lock: true

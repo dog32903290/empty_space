@@ -1,0 +1,34 @@
+exp_id: mother_x_son_act1_hospital
+protagonist:
+  path: 六個劇中人/母親
+  version: v3_tension
+counterpart:
+  path: 六個劇中人/兒子
+  version: v3_tension
+setting:
+  path: 六個劇中人/環境_醫院.yaml
+
+scene_premise: |
+  一大早。兒子接到警察的電話，說父親被送來急診，可能撐不過今晚。
+  他趕到醫院，在 ICU 外的走廊長椅遇到母親。他們十幾年沒見了。
+  母親先到一步，已經坐了一段時間。
+
+protagonist_prelude: |
+  你昨夜夢到他小時候被帶走。醒來時枕頭是濕的。
+  你是第一個到的。這讓你比他更早承受這個空間。
+
+counterpart_prelude: |
+  你昨晚和女朋友分手。她說「我不能等你。」
+  你還沒跟任何人說。警察的電話就是今早的事。
+
+initial_state:
+  verb: 承受（靠近）
+  stage: 前置積累
+  mode: 基線
+
+director_events: {}
+
+max_turns: 8
+termination:
+  on_fire_release: true
+  on_basin_lock: true

@@ -1,0 +1,34 @@
+exp_id: mother_x_son_act3_home
+protagonist:
+  path: 六個劇中人/母親
+  version: v3_tension
+counterpart:
+  path: 六個劇中人/兒子
+  version: v3_tension
+setting:
+  path: 六個劇中人/環境_家.yaml
+
+scene_premise: |
+  兒子把車停在自己公寓樓下。他沒問她要不要上去，她也沒問要去哪。
+  電梯門關上時，母親意識到這是她十幾年來第一次要進他的家。
+  現在天已經亮了。
+
+protagonist_prelude: |
+  他替你開門。你站在玄關。
+  這是他的地盤。每個角落都在說他，但說的那個他你不完全認得。
+
+counterpart_prelude: |
+  她站在你家門口。她比你記憶中小。
+  你家今天沒特別整理。昨晚和女朋友吵完架後的痕跡還在沙發上。
+
+initial_state:
+  verb: 承受（闖入）
+  stage: 靜置
+  mode: 裸露
+
+director_events: {}
+
+max_turns: 9
+termination:
+  on_fire_release: true
+  on_basin_lock: true
