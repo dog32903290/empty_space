@@ -71,3 +71,27 @@ def load_setting(rel_path: str) -> Setting:
         name=setting_file.stem,
         content=setting_file.read_text(encoding="utf-8"),
     )
+
+
+import yaml
+from empty_space.paths import EXPERIMENTS_DIR
+
+
+def load_experiment(exp_id: str) -> ExperimentConfig:
+    """Load an ExperimentConfig from EXPERIMENTS_DIR / <exp_id>.yaml.
+
+    Args:
+        exp_id: experiment identifier, matching filename (without .yaml).
+
+    Returns:
+        Validated ExperimentConfig.
+
+    Raises:
+        FileNotFoundError: if experiments/<exp_id>.yaml doesn't exist.
+        pydantic.ValidationError: if YAML content doesn't match schema.
+    """
+    exp_file = EXPERIMENTS_DIR / f"{exp_id}.yaml"
+    if not exp_file.exists():
+        raise FileNotFoundError(f"Experiment config not found: {exp_file}")
+    raw = yaml.safe_load(exp_file.read_text(encoding="utf-8"))
+    return ExperimentConfig.model_validate(raw)
