@@ -256,3 +256,227 @@ def test_extract_symbols_strips_whitespace_and_filters_empty():
         llm_client=client,
     )
     assert symbols == ["愧疚", "沉默"]
+
+
+# --- retrieve_top_n ---
+
+from empty_space.schemas import Ledger, LedgerEntry
+from empty_space.retrieval import retrieve_top_n, run_session_start_retrieval
+
+
+def _make_ledger(
+    *,
+    speaker: str = "protagonist",
+    persona_name: str = "母親",
+    entries: list[LedgerEntry] | None = None,
+    cooccurrence: dict | None = None,
+) -> Ledger:
+    entries = entries or []
+    cooc = cooccurrence or {}
+    # Build symbol_index from entries
+    symbol_index: dict[str, list[str]] = {}
+    for e in entries:
+        for s in e.symbols:
+            symbol_index.setdefault(s, []).append(e.id)
+    return Ledger(
+        relationship="R",
+        speaker=speaker,  # type: ignore[arg-type]
+        persona_name=persona_name,
+        ledger_version=len(entries),
+        candidates=entries,
+        symbol_index=symbol_index,
+        cooccurrence=cooc,
+    )
+
+
+def _make_entry(id: str, text: str, symbols: list[str], created: str = "2026-04-21T10:00:00Z") -> LedgerEntry:
+    return LedgerEntry(
+        id=id, text=text, symbols=symbols,
+        from_run="r/t", from_turn=1, created=created,
+    )
+
+
+def test_retrieve_empty_ledgers_returns_empty():
+    result = retrieve_top_n(
+        query_symbols=["A", "B"],
+        ledger_a=_make_ledger(),
+        ledger_b=_make_ledger(persona_name="兒子", speaker="counterpart"),
+        synonym_map={},
+        top_n=3,
+    )
+    assert result == []
+
+
+def test_retrieve_single_ledger_hit():
+    e1 = _make_entry("imp_001", "text 1", ["A", "B"])
+    e2 = _make_entry("imp_002", "text 2", ["C"])
+    ledger_a = _make_ledger(entries=[e1, e2])
+    ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
+
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        ledger_a=ledger_a,
+        ledger_b=ledger_b,
+        synonym_map={},
+        top_n=3,
+    )
+    assert len(result) == 1
+    assert result[0].id == "imp_001"
+    assert result[0].score == 1
+    assert result[0].matched_symbols == ("A",)
+    assert result[0].speaker == "protagonist"
+    assert result[0].persona_name == "母親"
+
+
+def test_retrieve_cross_ledger_dedup_by_speaker_and_id():
+    # Same id in both ledgers; dedup by (speaker, id)
+    e_a = _make_entry("imp_001", "a text", ["A"])
+    e_b = _make_entry("imp_001", "b text", ["A"])
+    ledger_a = _make_ledger(entries=[e_a])
+    ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart", entries=[e_b])
+
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        ledger_a=ledger_a,
+        ledger_b=ledger_b,
+        synonym_map={},
+        top_n=5,
+    )
+    # Both kept because (speaker, id) differs
+    assert len(result) == 2
+    speakers = {r.speaker for r in result}
+    assert speakers == {"protagonist", "counterpart"}
+
+
+def test_retrieve_sorts_by_score_desc():
+    e_high = _make_entry("imp_001", "high", ["A", "B", "C"])
+    e_low = _make_entry("imp_002", "low", ["A"])
+    ledger_a = _make_ledger(entries=[e_high, e_low])
+    ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
+
+    result = retrieve_top_n(
+        query_symbols=["A", "B", "C"],
+        ledger_a=ledger_a,
+        ledger_b=ledger_b,
+        synonym_map={},
+        top_n=3,
+    )
+    assert [r.id for r in result] == ["imp_001", "imp_002"]
+    assert result[0].score == 3
+    assert result[1].score == 1
+
+
+def test_retrieve_tiebreak_by_created_desc():
+    e_old = _make_entry("imp_001", "old", ["A"], created="2026-04-21T10:00:00Z")
+    e_new = _make_entry("imp_002", "new", ["A"], created="2026-04-22T10:00:00Z")
+    ledger_a = _make_ledger(entries=[e_old, e_new])
+    ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
+
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        ledger_a=ledger_a,
+        ledger_b=ledger_b,
+        synonym_map={},
+        top_n=3,
+    )
+    # Same score, newer first
+    assert result[0].id == "imp_002"
+    assert result[1].id == "imp_001"
+
+
+def test_retrieve_synonym_map_matches_variants():
+    synonym_map = {"愧疚": "愧疚", "愧疚感": "愧疚"}
+    e = _make_entry("imp_001", "mother's regret", ["愧疚感"])
+    ledger_a = _make_ledger(entries=[e])
+    ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
+
+    result = retrieve_top_n(
+        query_symbols=["愧疚"],
+        ledger_a=ledger_a,
+        ledger_b=ledger_b,
+        synonym_map=synonym_map,
+        top_n=3,
+    )
+    assert len(result) == 1
+    assert result[0].matched_symbols == ("愧疚",)
+
+
+def test_retrieve_top_n_truncates():
+    entries = [_make_entry(f"imp_{i:03d}", f"t{i}", ["A"]) for i in range(1, 6)]
+    ledger_a = _make_ledger(entries=entries)
+    ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
+
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        ledger_a=ledger_a,
+        ledger_b=ledger_b,
+        synonym_map={},
+        top_n=3,
+    )
+    assert len(result) == 3
+
+
+# --- run_session_start_retrieval ---
+
+def test_run_session_start_retrieval_empty_query_returns_empty(tmp_path, monkeypatch):
+    # Redirect LEDGERS_DIR
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path)
+
+    client = _MockLLMClient(response_text="- x\n")
+    result = run_session_start_retrieval(
+        speaker_role="protagonist",
+        persona_name="母親",
+        query_text="",
+        relationship="母親_x_兒子",
+        other_persona_name="兒子",
+        synonym_map={},
+        llm_client=client,
+        top_n=3,
+    )
+    assert result.query_symbols == []
+    assert result.expanded_symbols == []
+    assert result.impressions == []
+    assert result.flash_tokens_in == 0
+    assert client.calls == []
+
+
+def test_run_session_start_retrieval_full_flow(tmp_path, monkeypatch):
+    # Pre-populate a ledger via ledger.append_session_candidates
+    from empty_space.ledger import append_session_candidates
+    from empty_space.schemas import CandidateImpression
+
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path)
+
+    append_session_candidates(
+        relationship="母親_x_兒子",
+        speaker_role="counterpart",
+        persona_name="兒子",
+        candidates=[
+            (8, CandidateImpression(
+                text="她的沉默在這一刻比任何辯解都沉",
+                symbols=["沉默", "辯解", "愧疚"],
+            )),
+        ],
+        source_run="prev_exp/2026-04-21T09-00-00",
+    )
+
+    # Flash returns "愧疚" among extracted symbols
+    client = _MockLLMClient(response_text="- 愧疚\n- 母愛\n")
+    result = run_session_start_retrieval(
+        speaker_role="protagonist",
+        persona_name="母親",
+        query_text="你昨夜夢到他小時候被帶走。",
+        relationship="母親_x_兒子",
+        other_persona_name="兒子",
+        synonym_map={},
+        llm_client=client,
+        top_n=3,
+    )
+
+    assert result.query_symbols == ["愧疚", "母愛"]
+    assert "愧疚" in result.expanded_symbols
+    assert len(result.impressions) == 1
+    assert result.impressions[0].text == "她的沉默在這一刻比任何辯解都沉"
+    assert result.impressions[0].matched_symbols == ("愧疚",)
+    assert result.impressions[0].speaker == "counterpart"
+    assert result.flash_tokens_in > 0
