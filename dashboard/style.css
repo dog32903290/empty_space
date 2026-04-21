@@ -1,0 +1,171 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: 'PingFang TC', 'Noto Serif CJK TC', 'Songti TC', serif;
+    background: #1a1a1a;
+    color: #e8e4d8;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+header {
+    padding: 12px 24px;
+    background: #0f0f0f;
+    border-bottom: 1px solid #2a2a2a;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    font-size: 13px;
+    color: #888;
+    font-family: 'SF Mono', Monaco, monospace;
+    flex-shrink: 0;
+}
+
+header select {
+    background: #1a1a1a;
+    color: #e8e4d8;
+    border: 1px solid #2a2a2a;
+    padding: 4px 8px;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-size: 12px;
+    max-width: 420px;
+}
+
+main {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 260px 1fr 260px;
+    gap: 0;
+    overflow: hidden;
+    min-height: 0;
+}
+
+aside {
+    padding: 24px 16px;
+    background: #141414;
+    overflow-y: auto;
+    font-size: 13px;
+    border-left: 1px solid #2a2a2a;
+    border-right: 1px solid #2a2a2a;
+}
+
+aside h2 {
+    font-size: 16px;
+    color: #c8b888;
+    margin-bottom: 4px;
+    letter-spacing: 2px;
+}
+
+.sidebar-label {
+    color: #666;
+    font-size: 11px;
+    margin-bottom: 12px;
+    letter-spacing: 1px;
+}
+
+aside ul { list-style: none; }
+aside li {
+    padding: 10px 0;
+    border-bottom: 1px solid #222;
+    line-height: 1.6;
+}
+aside li.empty {
+    color: #555;
+    font-style: italic;
+}
+.imp-text {
+    color: #d8c8a8;
+    margin-bottom: 4px;
+}
+.imp-meta {
+    color: #555;
+    font-size: 11px;
+    font-family: 'SF Mono', Monaco, monospace;
+}
+
+.script {
+    padding: 48px 80px;
+    overflow-y: auto;
+    background: #f5f0e5;
+    color: #1a1a1a;
+    font-size: 16px;
+    line-height: 1.9;
+    max-width: 100%;
+    font-family: 'Songti TC', 'Noto Serif CJK TC', 'PingFang TC', serif;
+}
+
+.script h1 {
+    font-size: 22px;
+    margin-bottom: 24px;
+    color: #3a3a3a;
+    font-family: 'SF Mono', Monaco, monospace;
+    font-weight: normal;
+    letter-spacing: 1px;
+}
+
+.script h2, .script h3 {
+    font-size: 18px;
+    margin-top: 32px;
+    margin-bottom: 12px;
+    color: #3a3a3a;
+    font-weight: normal;
+    letter-spacing: 1px;
+}
+
+.script hr {
+    border: none;
+    border-top: 1px solid #c8bca0;
+    margin: 24px 0;
+}
+
+.script p {
+    margin-bottom: 16px;
+}
+
+.script strong {
+    color: #7a4a3a;
+    font-weight: bold;
+    font-family: 'Songti TC', 'Noto Serif CJK TC', serif;
+}
+
+/* Turn headers (**Turn N · 名稱**) — render with more vertical space */
+.script p strong:first-child {
+    display: block;
+    margin-top: 32px;
+    margin-bottom: 8px;
+    font-size: 15px;
+    letter-spacing: 2px;
+}
+
+/* [世界] director event markers */
+.script p strong:only-child {
+    color: #a85a3a;
+    font-style: italic;
+}
+
+.script.fade-in {
+    animation: fadeIn 500ms ease-in;
+}
+.script.pulse {
+    animation: pulse 400ms ease-out;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+@keyframes pulse {
+    0% { background: #f5f0e5; }
+    30% { background: #fff9e8; }
+    100% { background: #f5f0e5; }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333; border-radius: 4px; }
+aside::-webkit-scrollbar-thumb { background: #2a2a2a; }
+.script::-webkit-scrollbar-thumb { background: #c8bca0; }

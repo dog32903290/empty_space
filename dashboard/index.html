@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>空的空間 · 對話實況</title>
+    <link rel="stylesheet" href="style.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+</head>
+<body>
+    <header>
+        <select id="run-selector"></select>
+        <div id="meta-summary">—</div>
+    </header>
+    <main>
+        <aside id="sidebar-left">
+            <h2 id="role-left-name">母親</h2>
+            <div class="sidebar-label">你可能想起的：</div>
+            <ul id="impressions-left"></ul>
+        </aside>
+        <section id="script" class="script"></section>
+        <aside id="sidebar-right">
+            <h2 id="role-right-name">兒子</h2>
+            <div class="sidebar-label">你可能想起的：</div>
+            <ul id="impressions-right"></ul>
+        </aside>
+    </main>
+    <script src="app.js"></script>
+</body>
+</html>
