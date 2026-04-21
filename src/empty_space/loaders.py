@@ -53,3 +53,21 @@ def load_persona(rel_path: str, version: str) -> Persona:
         core_text=core_text,
         relationship_texts=relationship_texts,
     )
+
+
+def load_setting(rel_path: str) -> Setting:
+    """Load a Setting from PERSONA_ROOT / rel_path.
+
+    Args:
+        rel_path: path relative to PERSONA_ROOT (e.g., "六個劇中人/環境_醫院.yaml")
+
+    Returns:
+        Setting with name (filename stem) and raw YAML content.
+    """
+    setting_file = PERSONA_ROOT / rel_path
+    if not setting_file.exists():
+        raise FileNotFoundError(f"Setting file not found: {setting_file}")
+    return Setting(
+        name=setting_file.stem,
+        content=setting_file.read_text(encoding="utf-8"),
+    )
