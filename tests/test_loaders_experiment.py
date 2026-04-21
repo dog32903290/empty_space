@@ -10,9 +10,9 @@ def test_load_first_experiment():
     assert config.counterpart.path == "六個劇中人/兒子"
     assert config.setting.path == "六個劇中人/環境_醫院.yaml"
     assert config.initial_state.verb == "承受（靠近）"
-    assert 8 in config.scripted_turns
-    assert config.scripted_turns[8].speaker == "counterpart"
-    assert "你從來沒有找過我" in config.scripted_turns[8].content
+    assert config.scene_premise is not None
+    assert "ICU" in config.scene_premise
+    assert config.director_events == {}
     assert config.max_turns == 20
     assert config.termination.on_fire_release is True
 
