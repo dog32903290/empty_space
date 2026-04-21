@@ -7,7 +7,6 @@ from empty_space.schemas import (
     InitialState,
     Persona,
     Setting,
-    Turn,
 )
 
 
@@ -58,7 +57,7 @@ def build_system_prompt(
     )
 
     scene_parts: list[str] = [setting.content.rstrip()]
-    if scene_premise:
+    if scene_premise is not None:
         scene_parts.append(f"### 場景前提\n{scene_premise.rstrip()}")
     if active_events:
         event_lines = "\n".join(
