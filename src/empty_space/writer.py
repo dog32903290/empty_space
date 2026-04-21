@@ -53,3 +53,99 @@ def _atomic_write_yaml(path: Path, data: object) -> None:
         encoding="utf-8",
     )
     os.replace(tmp, path)
+
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from empty_space.schemas import Turn
+
+
+def append_turn(out_dir: Path, turn: "Turn") -> None:
+    """Write turn_NNN.yaml atomically; append director_event marker (if new) and
+    turn entry to conversation.md + conversation.jsonl.
+    """
+    turn_file = out_dir / "turns" / f"turn_{turn.turn_number:03d}.yaml"
+    _atomic_write_yaml(turn_file, _turn_to_yaml_dict(turn))
+
+    new_event = _new_event_this_turn(turn)
+    _append_conversation_md(out_dir, turn, new_event)
+    _append_conversation_jsonl(out_dir, turn, new_event)
+
+
+def _new_event_this_turn(turn: "Turn") -> tuple[int, str] | None:
+    """Return the event triggered AT this turn, if any.
+
+    Convention: runner appends director_events[turn_number] to active_events
+    just before the LLM call, so if the last active event's turn equals
+    turn.turn_number, that event was triggered this turn.
+    """
+    if turn.director_events_active and turn.director_events_active[-1][0] == turn.turn_number:
+        return turn.director_events_active[-1]
+    return None
+
+
+def _turn_to_yaml_dict(turn: "Turn") -> dict:
+    return {
+        "turn": turn.turn_number,
+        "speaker": turn.speaker,
+        "persona_name": turn.persona_name,
+        "timestamp": turn.timestamp,
+        "prompt_assembled": {
+            "system": turn.prompt_system,
+            "user": turn.prompt_user,
+            "tokens": {
+                "system": turn.tokens_in,
+                "user": 0,  # Phase 2 doesn't split system/user tokens separately
+            },
+        },
+        "response": {
+            "content": turn.content,
+            "raw": turn.raw_response,
+            "tokens_out": turn.tokens_out,
+            "model": turn.model,
+            "latency_ms": turn.latency_ms,
+        },
+        "candidate_impressions": [
+            {"text": imp.text, "symbols": list(imp.symbols)}
+            for imp in turn.candidate_impressions
+        ],
+        "director_events_active": [
+            {"turn": t, "content": c} for t, c in turn.director_events_active
+        ],
+        "parse_error": turn.parse_error,
+    }
+
+
+def _append_conversation_md(
+    out_dir: Path, turn: "Turn", new_event: tuple[int, str] | None
+) -> None:
+    parts: list[str] = []
+    if new_event is not None:
+        parts.append(f"**[世界] Turn {new_event[0]}：{new_event[1]}**\n")
+    parts.append(f"**Turn {turn.turn_number} · {turn.persona_name}**\n{turn.content}\n")
+    with (out_dir / "conversation.md").open("a", encoding="utf-8") as f:
+        f.write("\n".join(parts) + "\n")
+
+
+def _append_conversation_jsonl(
+    out_dir: Path, turn: "Turn", new_event: tuple[int, str] | None
+) -> None:
+    lines: list[str] = []
+    if new_event is not None:
+        lines.append(json.dumps(
+            {"type": "director_event", "turn": new_event[0], "content": new_event[1]},
+            ensure_ascii=False,
+        ))
+    lines.append(json.dumps(
+        {
+            "turn": turn.turn_number,
+            "speaker": turn.speaker,
+            "name": turn.persona_name,
+            "content": turn.content,
+            "timestamp": turn.timestamp,
+        },
+        ensure_ascii=False,
+    ))
+    with (out_dir / "conversation.jsonl").open("a", encoding="utf-8") as f:
+        for ln in lines:
+            f.write(ln + "\n")
