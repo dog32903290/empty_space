@@ -105,15 +105,14 @@ def test_leading_and_trailing_whitespace_in_main():
 
 
 def test_marker_only_no_impressions_block():
+    """Marker followed by empty block: yaml.safe_load returns None → treated as no impressions."""
     raw = """她低著頭。
 ---IMPRESSIONS---
 """
     main, impressions, err = parse_response(raw)
-    # impressions_block is empty string after marker → yaml.safe_load returns None → not a list
-    assert main == "她低著頭."[:-1] + "。" or main == "她低著頭。"
+    assert main == "她低著頭。"
     assert impressions == []
-    # None root triggers "not a list" error — acceptable
-    assert err is None or "list" in err
+    assert err is None
 
 
 def test_impressions_is_none_after_marker():
