@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the foundational Python package for empty-space — path config, pydantic schemas (Persona / Setting / ExperimentConfig), YAML loaders, and thin LLM client wrappers (Gemini + Anthropic). No runner, no Judge, no Composer, no Dashboard yet.
+**Goal:** Build the foundational Python package for empty-space — path config, pydantic schemas (Persona / Setting / ExperimentConfig), YAML loaders, and a Gemini LLM client wrapper supporting both Flash (Judge / roles / retrieval / rubric) and Pro (Composer). No runner, no Judge, no Composer, no Dashboard yet.
 
 **Architecture:** New Python 3.11+ package at `/Users/chenbaiwei/Desktop/vibe coding/empty-space/` using `src/` layout. Persona materials referenced via Path config from sibling `../演員方法論xhermes/persona/` (柏為's living persona library — no copy, no symlink; absolute path resolved at import time). Persona and Setting YAMLs have heterogeneous structure (v3_tension is structured fields; baseline is prose narrative) — stored as raw text for prompt assembler to insert verbatim. ExperimentConfig is strictly typed (fixed fields the runner needs).
 
-**Tech Stack:** Python 3.11+, uv (package manager + venv), google-genai, anthropic Python SDK, pyyaml, pydantic v2, pytest, pytest-mock, python-dotenv.
+**Model decision (2026-04-21 update):** Entire engine runs on Gemini — Flash for most tasks, Pro for Composer. 柏為's Claude Max subscription does not cover Anthropic SDK usage, and he is not funding separate API credits. See spec §4.2 for rationale. This plan drops the originally-planned Anthropic client; Task 11 now has two sub-cases (Flash + Pro model params on one client); Task 12 is deleted.
+
+**Tech Stack:** Python 3.11+, uv (package manager + venv), google-genai, pyyaml, pydantic v2, pytest, pytest-mock, python-dotenv. (No `anthropic` package.)
 
 **Relationship to existing `演員方法論xhermes/` repo:** Zero shared code. Only shared asset is `persona/` directory, which empty-space references via `PERSONA_ROOT` path. Do NOT copy scripts, results, or experiments from there. The old repo stays柏為's experimental sandbox; empty-space is the product-track codebase.
 
@@ -938,15 +940,41 @@ git commit -m "feat: add load_experiment loader + first experiment config"
 
 ---
 
-### Task 11: LLM client — Gemini wrapper
+### Task 11 (pre-step): Remove unused `anthropic` dependency
 
-Thin wrapper over `google-genai` SDK. Normalized response object: `content`, `raw`, `tokens_out`, `model`, `latency_ms`.
+Before writing the LLM client, reconcile the pyproject.toml with the 2026-04-21 model decision (no Anthropic).
+
+- [ ] **Pre-step A: Remove `anthropic` from `pyproject.toml`**
+
+Edit `pyproject.toml` — delete the line `"anthropic>=0.40",` from the `dependencies` list.
+
+- [ ] **Pre-step B: Re-lock and uninstall**
+
+```bash
+cd "/Users/chenbaiwei/Desktop/vibe coding/empty-space"
+uv sync --all-extras
+```
+
+uv should drop the anthropic package from `.venv` and update `uv.lock`.
+
+- [ ] **Pre-step C: Commit**
+
+```bash
+git add pyproject.toml uv.lock
+git commit -m "chore: drop anthropic dependency (engine goes full Gemini)"
+```
+
+---
+
+### Task 11: LLM client — Gemini wrapper (Flash + Pro)
+
+Thin wrapper over `google-genai` SDK. Supports both `gemini-2.5-flash` (default, most tasks) and `gemini-2.5-pro` (Composer) via the `model` parameter. Normalized response object: `content`, `raw`, `tokens_out`, `model`, `latency_ms`.
 
 **Files:**
 - Create: `src/empty_space/llm.py`
 - Create: `tests/test_llm_gemini.py`
 
-- [ ] **Step 1: Write failing test**
+- [ ] **Step 1: Write failing tests**
 
 Create `tests/test_llm_gemini.py`:
 
@@ -956,28 +984,55 @@ from unittest.mock import MagicMock, patch
 from empty_space.llm import GeminiClient, GeminiResponse
 
 
-def test_gemini_client_generate_returns_normalized_response():
+def _mock_response(text: str = "hello", tokens: int = 42):
+    r = MagicMock()
+    r.text = text
+    r.usage_metadata.candidates_token_count = tokens
+    return r
+
+
+def test_gemini_client_generate_flash_default():
     with patch("empty_space.llm.genai.Client") as mock_client_cls:
         mock_client = MagicMock()
         mock_client_cls.return_value = mock_client
-
-        mock_response = MagicMock()
-        mock_response.text = "主回應內容\n\n---IMPRESSIONS---\n- text: 測試\n  symbols: [a]"
-        mock_response.usage_metadata.candidates_token_count = 42
-        mock_client.models.generate_content.return_value = mock_response
+        mock_client.models.generate_content.return_value = _mock_response(
+            text="主回應內容\n\n---IMPRESSIONS---\n- text: 測試\n  symbols: [a]",
+            tokens=42,
+        )
 
         client = GeminiClient(api_key="test_key")
         result = client.generate(
             system="系統提示",
             user="用戶訊息",
-            model="gemini-2.5-flash",
-        )
+        )  # default model
 
     assert isinstance(result, GeminiResponse)
-    assert result.content == mock_response.text
     assert result.tokens_out == 42
     assert result.model == "gemini-2.5-flash"
     assert result.latency_ms >= 0
+
+
+def test_gemini_client_generate_pro_for_composer():
+    with patch("empty_space.llm.genai.Client") as mock_client_cls:
+        mock_client = MagicMock()
+        mock_client_cls.return_value = mock_client
+        mock_client.models.generate_content.return_value = _mock_response(
+            text="composer snapshot",
+            tokens=2500,
+        )
+
+        client = GeminiClient(api_key="test_key")
+        result = client.generate(
+            system="composer instruction",
+            user="貫通軸 + 關係層 + ledger top-15",
+            model="gemini-2.5-pro",
+        )
+
+    assert result.model == "gemini-2.5-pro"
+    assert result.tokens_out == 2500
+    # verify the SDK was called with the Pro model name
+    call_kwargs = mock_client.models.generate_content.call_args.kwargs
+    assert call_kwargs["model"] == "gemini-2.5-pro"
 
 
 def test_gemini_client_reads_api_key_from_env(monkeypatch):
@@ -1068,18 +1123,28 @@ class GeminiClient:
 uv run pytest tests/test_llm_gemini.py -v
 ```
 
-Expected: `2 passed`.
+Expected: `3 passed`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/empty_space/llm.py tests/test_llm_gemini.py
-git commit -m "feat: add GeminiClient wrapper"
+git commit -m "feat: add GeminiClient wrapper (supports Flash + Pro)"
 ```
 
 ---
 
-### Task 12: LLM client — Anthropic wrapper
+### Task 12: REMOVED (2026-04-21)
+
+Originally this was an AnthropicClient wrapper. Removed because the entire engine now runs on Gemini (柏為's Max subscription does not cover Anthropic SDK usage). The model-switching previously split across two clients is now a single `GeminiClient.generate(..., model=...)` call — see Task 11.
+
+Task ID #12 in the task tracker is marked `deleted`. Skip this section entirely.
+
+---
+
+### Task 12 (original, preserved for reference only, do not implement):
+
+~~Task 12: LLM client — Anthropic wrapper~~
 
 **Files:**
 - Modify: `src/empty_space/llm.py`
@@ -1200,9 +1265,9 @@ git commit -m "feat: add AnthropicClient wrapper"
 
 ---
 
-### Task 13: Hello-world smoke test (real API call)
+### Task 13: Hello-world smoke test (real Gemini API call)
 
-Manual check that both API keys work and the client wrappers produce real responses. Not a unit test — run once after Task 12, then keep for later manual verification.
+Manual check that the Gemini API key works and the wrapper produces real responses at both Flash and Pro. Not a unit test — run once after Task 11, then keep for later manual verification.
 
 **Files:**
 - Create: `scripts/__init__.py`
@@ -1213,61 +1278,63 @@ Manual check that both API keys work and the client wrappers produce real respon
 - [ ] **Step 2: Create `scripts/hello.py`**
 
 ```python
-"""Smoke test: verify Gemini 2.5 Flash and Anthropic Opus 4.7 API keys work.
+"""Smoke test: verify Gemini 2.5 Flash and Gemini 2.5 Pro work end-to-end.
 
 Usage:
     uv run python scripts/hello.py
 """
-from empty_space.llm import GeminiClient, AnthropicClient
+from empty_space.llm import GeminiClient
 
 
 def main():
-    print("Testing Gemini 2.5 Flash...")
-    gem = GeminiClient()
-    g_resp = gem.generate(
+    client = GeminiClient()
+
+    print("Testing Gemini 2.5 Flash (roles / Judge / retrieval / rubric)...")
+    f_resp = client.generate(
         system="Reply in one short sentence.",
         user="What is the smallest unit of theatre according to Peter Brook?",
+        model="gemini-2.5-flash",
     )
-    print(f"  Response: {g_resp.content}")
-    print(f"  Tokens out: {g_resp.tokens_out}, latency: {g_resp.latency_ms}ms")
+    print(f"  Response: {f_resp.content}")
+    print(f"  Tokens out: {f_resp.tokens_out}, latency: {f_resp.latency_ms}ms")
 
-    print("\nTesting Anthropic Opus 4.7...")
-    ant = AnthropicClient()
-    a_resp = ant.generate(
+    print("\nTesting Gemini 2.5 Pro (Composer)...")
+    p_resp = client.generate(
         system="Reply in one short sentence.",
         user="What is the smallest unit of theatre according to Peter Brook?",
+        model="gemini-2.5-pro",
     )
-    print(f"  Response: {a_resp.content}")
-    print(f"  Tokens out: {a_resp.tokens_out}, latency: {a_resp.latency_ms}ms")
+    print(f"  Response: {p_resp.content}")
+    print(f"  Tokens out: {p_resp.tokens_out}, latency: {p_resp.latency_ms}ms")
 
-    print("\nOK — both APIs work.")
+    print("\nOK — Gemini Flash + Pro both work.")
 
 
 if __name__ == "__main__":
     main()
 ```
 
-- [ ] **Step 3: Run `hello.py` with real keys**
+- [ ] **Step 3: Run `hello.py` with real key**
 
 ```bash
 cd "/Users/chenbaiwei/Desktop/vibe coding/empty-space"
 uv run python scripts/hello.py
 ```
 
-Expected: two blocks printed, each ending in a sensible one-sentence response about "two actors and one watcher" or Peter Brook's theatre definition. Final line: `OK — both APIs work.`
+Expected: two blocks printed, each ending in a sensible one-sentence response about "two actors and one watcher" or Peter Brook's theatre definition. Final line: `OK — Gemini Flash + Pro both work.`
 
 If `KeyError: 'GEMINI_API_KEY'`:
 - check `.env` contains the key
-- `cat .env | grep API_KEY`
+- `cat .env | grep GEMINI`
 
-If HTTP 401:
-- API key invalid — regenerate from the provider's console
+If HTTP 401 / 403:
+- API key invalid or Pro access not enabled — regenerate from https://aistudio.google.com/apikey
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add scripts/
-git commit -m "feat: add hello.py smoke test for Gemini + Opus"
+git commit -m "feat: add hello.py smoke test for Gemini Flash + Pro"
 ```
 
 ---
