@@ -27,3 +27,50 @@ class Setting(BaseModel):
     """
     name: str       # e.g., "環境_醫院"
     content: str    # full YAML content
+
+
+from typing import Literal
+
+
+class PersonaRef(BaseModel):
+    """Reference to a Persona by path + version (resolved by loader)."""
+    path: str       # relative to PERSONA_ROOT, e.g., "六個劇中人/母親"
+    version: str    # e.g., "v3_tension"
+
+
+class SettingRef(BaseModel):
+    """Reference to a Setting YAML file (resolved by loader)."""
+    path: str       # relative to PERSONA_ROOT, e.g., "六個劇中人/環境_醫院.yaml"
+
+
+class InitialState(BaseModel):
+    """Opening verb / stage / mode — feeds the initial Judge state."""
+    verb: str
+    stage: str
+    mode: str
+
+
+class ScriptedTurn(BaseModel):
+    """Forced injection at a specific turn number (experiment rigor)."""
+    speaker: Literal["protagonist", "counterpart"]
+    content: str
+
+
+class Termination(BaseModel):
+    """When to stop the experiment (in addition to max_turns)."""
+    on_fire_release: bool = True
+    on_basin_lock: bool = True
+
+
+class ExperimentConfig(BaseModel):
+    """Top-level config for a single experiment run."""
+    exp_id: str
+    protagonist: PersonaRef
+    counterpart: PersonaRef
+    setting: SettingRef
+    protagonist_opener: str
+    counterpart_system: str
+    initial_state: InitialState
+    scripted_turns: dict[int, ScriptedTurn] = Field(default_factory=dict)
+    max_turns: int = 20
+    termination: Termination = Field(default_factory=Termination)
