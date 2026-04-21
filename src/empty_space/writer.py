@@ -93,10 +93,7 @@ def _turn_to_yaml_dict(turn: "Turn") -> dict:
         "prompt_assembled": {
             "system": turn.prompt_system,
             "user": turn.prompt_user,
-            "tokens": {
-                "system": turn.tokens_in,
-                "user": 0,  # Phase 2 doesn't split system/user tokens separately
-            },
+            "prompt_tokens": turn.tokens_in,  # total prompt tokens reported by API
         },
         "response": {
             "content": turn.content,
@@ -124,7 +121,7 @@ def _append_conversation_md(
         parts.append(f"**[世界] Turn {new_event[0]}：{new_event[1]}**\n")
     parts.append(f"**Turn {turn.turn_number} · {turn.persona_name}**\n{turn.content}\n")
     with (out_dir / "conversation.md").open("a", encoding="utf-8") as f:
-        f.write("\n".join(parts) + "\n")
+        f.write("".join(parts) + "\n")
 
 
 def _append_conversation_jsonl(

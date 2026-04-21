@@ -41,6 +41,7 @@ class GeminiClient:
 
     def generate(
         self,
+        *,
         system: str,
         user: str,
         model: str = "gemini-2.5-flash",
