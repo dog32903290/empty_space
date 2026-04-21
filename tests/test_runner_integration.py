@@ -59,10 +59,13 @@ def minimal_config(tmp_path) -> ExperimentConfig:
 
 
 def test_happy_path_runs_all_turns(minimal_config, tmp_path, monkeypatch):
-    # Redirect RUNS_DIR to tmp_path
+    # Redirect RUNS_DIR and LEDGERS_DIR to tmp_path
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
 
     responses = [
+        "- 醫院\n- 父親\n",   # NEW: protagonist extract_symbols
+        "- 醫院\n- 父親\n",   # NEW: counterpart extract_symbols
         "你回來了。",
         "嗯。",
         "⋯⋯",
@@ -86,7 +89,12 @@ def test_happy_path_runs_all_turns(minimal_config, tmp_path, monkeypatch):
 
 def test_speaker_alternation_mother_starts(minimal_config, tmp_path, monkeypatch):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
-    client = MockLLMClient(["你回來了。", "嗯。", "⋯⋯", "不關我的事。"])
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
+    client = MockLLMClient([
+        "- 醫院\n- 父親\n",   # protagonist extract_symbols
+        "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "你回來了。", "嗯。", "⋯⋯", "不關我的事。",
+    ])
     result = run_session(config=minimal_config, llm_client=client)
 
     t1 = yaml.safe_load((result.out_dir / "turns" / "turn_001.yaml").read_text(encoding="utf-8"))
@@ -102,18 +110,26 @@ def test_speaker_alternation_mother_starts(minimal_config, tmp_path, monkeypatch
 
 def test_system_prompt_contains_correct_persona_per_turn(minimal_config, tmp_path, monkeypatch):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
-    client = MockLLMClient(["a", "b", "c", "d"])
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
+    client = MockLLMClient([
+        "- 醫院\n- 父親\n",   # protagonist extract_symbols (call 0)
+        "- 醫院\n- 父親\n",   # counterpart extract_symbols (call 1)
+        "a", "b", "c", "d",  # turn calls (calls 2-5)
+    ])
     run_session(config=minimal_config, llm_client=client)
 
-    # Turn 1 is 母親 (protagonist)
-    assert "## 關係層：對兒子" in client.calls[0]["system"]
-    # Turn 2 is 兒子 (counterpart)
-    assert "## 關係層：對母親" in client.calls[1]["system"]
+    # Calls 0-1 are extract_symbols; Turn 1 is call 2 (母親/protagonist)
+    assert "## 關係層：對兒子" in client.calls[2]["system"]
+    # Turn 2 is call 3 (兒子/counterpart)
+    assert "## 關係層：對母親" in client.calls[3]["system"]
 
 
 def test_candidate_impressions_extracted_and_stored(minimal_config, tmp_path, monkeypatch):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
     responses = [
+        "- 醫院\n- 父親\n",   # protagonist extract_symbols
+        "- 醫院\n- 父親\n",   # counterpart extract_symbols
         """你回來了。
 
 ---IMPRESSIONS---
@@ -137,6 +153,7 @@ def test_director_event_injected_into_system_from_trigger_turn(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
     config = ExperimentConfig(
         exp_id="mother_x_son_hospital_v3_001",
         protagonist=PersonaRef(path="六個劇中人/母親", version="v3_tension"),
@@ -145,10 +162,13 @@ def test_director_event_injected_into_system_from_trigger_turn(
         initial_state=InitialState(verb="承受", stage="前置積累", mode="基線"),
         director_events={3: "護士推一張空床進病房"},
         max_turns=5,
+        # No scene_premise/preludes → _compose_query returns "" → extract_symbols
+        # skips the LLM call → no prepended extract responses needed.
     )
     client = MockLLMClient(["a", "b", "c", "d", "e"])
     run_session(config=config, llm_client=client)
 
+    # No extract_symbols calls (empty query). Turn 1 is call 0, Turn 2 is call 1, etc.
     # Turn 1-2 system prompts should NOT contain the event (it triggers at Turn 3)
     assert "護士推一張空床進病房" not in client.calls[0]["system"]
     assert "護士推一張空床進病房" not in client.calls[1]["system"]
@@ -160,6 +180,7 @@ def test_director_event_injected_into_system_from_trigger_turn(
 
 def test_director_events_accumulate_across_turns(tmp_path, monkeypatch):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
     config = ExperimentConfig(
         exp_id="mother_x_son_hospital_v3_001",
         protagonist=PersonaRef(path="六個劇中人/母親", version="v3_tension"),
@@ -168,11 +189,12 @@ def test_director_events_accumulate_across_turns(tmp_path, monkeypatch):
         initial_state=InitialState(verb="承受", stage="前置積累", mode="基線"),
         director_events={2: "event A", 4: "event B"},
         max_turns=5,
+        # No scene_premise/preludes → no extract_symbols LLM calls.
     )
     client = MockLLMClient(["a", "b", "c", "d", "e"])
     run_session(config=config, llm_client=client)
 
-    # Turn 5 system should contain both events in turn order
+    # No extract_symbols calls. Turn 5 is call index 4.
     sys5 = client.calls[4]["system"]
     assert "Turn 2：event A" in sys5
     assert "Turn 4：event B" in sys5
@@ -181,6 +203,7 @@ def test_director_events_accumulate_across_turns(tmp_path, monkeypatch):
 
 def test_parse_error_recorded_but_session_continues(tmp_path, monkeypatch):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
     config = ExperimentConfig(
         exp_id="mother_x_son_hospital_v3_001",
         protagonist=PersonaRef(path="六個劇中人/母親", version="v3_tension"),
@@ -188,6 +211,7 @@ def test_parse_error_recorded_but_session_continues(tmp_path, monkeypatch):
         setting=SettingRef(path="六個劇中人/環境_醫院.yaml"),
         initial_state=InitialState(verb="承受", stage="前置積累", mode="基線"),
         max_turns=3,
+        # No scene_premise/preludes → no extract_symbols LLM calls.
     )
     broken_yaml_response = """她低著頭。
 
@@ -209,8 +233,13 @@ def test_parse_error_recorded_but_session_continues(tmp_path, monkeypatch):
 
 def test_max_turns_terminates_session(tmp_path, monkeypatch, minimal_config):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
     config = minimal_config.model_copy(update={"max_turns": 2})
-    client = MockLLMClient(["a", "b"])
+    client = MockLLMClient([
+        "- 醫院\n- 父親\n",   # protagonist extract_symbols
+        "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "a", "b",
+    ])
     result = run_session(config=config, llm_client=client)
     assert result.total_turns == 2
     assert not (result.out_dir / "turns" / "turn_003.yaml").exists()
@@ -221,6 +250,7 @@ def test_llm_exception_aborts_session_partial_turns_kept(
     tmp_path, monkeypatch, minimal_config
 ):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
 
     class ExplodingClient:
         def __init__(self):
@@ -228,7 +258,9 @@ def test_llm_exception_aborts_session_partial_turns_kept(
 
         def generate(self, *, system, user, model="gemini-2.5-flash"):
             self.call_count += 1
-            if self.call_count == 3:
+            # Calls 1-2 are extract_symbols (protagonist + counterpart).
+            # Calls 3-4 are turn 1 and turn 2. Call 5 = turn 3 → BOOM.
+            if self.call_count == 5:
                 raise RuntimeError("network boom")
             return GeminiResponse(
                 content="x",
@@ -257,16 +289,25 @@ def test_two_runs_of_same_exp_create_distinct_timestamp_dirs(
     tmp_path, monkeypatch, minimal_config
 ):
     monkeypatch.setattr("empty_space.runner.RUNS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
 
     # First run
-    client1 = MockLLMClient(["a", "b", "c", "d"])
+    client1 = MockLLMClient([
+        "- 醫院\n- 父親\n",   # protagonist extract_symbols
+        "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "a", "b", "c", "d",
+    ])
     result1 = run_session(config=minimal_config, llm_client=client1)
 
     # Sleep a second to ensure timestamp differs
     import time as _time
     _time.sleep(1.1)
 
-    client2 = MockLLMClient(["x", "y", "z", "w"])
+    client2 = MockLLMClient([
+        "- 醫院\n- 父親\n",   # protagonist extract_symbols
+        "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "x", "y", "z", "w",
+    ])
     result2 = run_session(config=minimal_config, llm_client=client2)
 
     assert result1.out_dir != result2.out_dir

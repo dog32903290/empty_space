@@ -1,0 +1,13 @@
+# Synonym canonical map for cross-session ledger retrieval.
+# Format: each group is a list; first element is the canonical form.
+#
+# Example:
+#   groups:
+#     - [愧疚, 愧疚感, 罪惡感]       # three variants normalize to 愧疚
+#     - [沉默, 不說話, 沉默不語]
+#
+# Effect (spec §7.7): only applies at retrieval matching step. Cooccurrence
+# and candidate impression ledger entries are stored verbatim (Flash's
+# original output), preserving the raw evidence trail.
+
+groups: []
