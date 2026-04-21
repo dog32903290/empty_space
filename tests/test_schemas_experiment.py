@@ -1,6 +1,3 @@
-import pytest
-from pydantic import ValidationError
-
 from empty_space.schemas import (
     ExperimentConfig,
     PersonaRef,
@@ -51,7 +48,7 @@ def test_experiment_defaults_work_with_minimal_input():
     assert config.termination.on_fire_release is True
 
 
-def test_experiment_rejects_unknown_fields_not_required():
+def test_experiment_scene_premise_is_optional():
     # scene_premise is optional; missing is fine
     config = ExperimentConfig(
         exp_id="x",

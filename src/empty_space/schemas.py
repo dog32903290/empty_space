@@ -6,7 +6,7 @@ lists of strings under named fields; baseline uses prose narrative).
 Rather than force a rigid schema, store raw YAML content as text and
 let the prompt assembler inject it verbatim.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
@@ -76,7 +76,7 @@ class ExperimentConfig(BaseModel):
 
 # --- Runtime dataclasses (Phase 2) ---
 
-@dataclass(frozen=True)
+@dataclass
 class CandidateImpression:
     """A single impression line emitted by the role LLM (unvetted until Phase 4 rubric)."""
     text: str
