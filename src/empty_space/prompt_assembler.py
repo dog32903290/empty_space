@@ -7,6 +7,7 @@ from empty_space.schemas import (
     InitialState,
     Persona,
     Setting,
+    Turn,
 )
 
 
@@ -69,3 +70,19 @@ def build_system_prompt(
     blocks.append(f"## 輸出格式\n{_OUTPUT_FORMAT_INSTRUCTION}")
 
     return "\n\n".join(blocks)
+
+
+def build_user_message(history: list[Turn]) -> str:
+    """Assemble the user message from accumulated turn history.
+
+    Turn 1 (empty history) → "（場景開始。）" (minimal mechanical trigger).
+    Turn N ≥ 2 → lines of "[Turn K <persona_name>] <content>", one per turn.
+
+    No tail anchor, no directive — role shaping is the system prompt's job.
+    """
+    if not history:
+        return "（場景開始。）"
+    return "\n".join(
+        f"[Turn {t.turn_number} {t.persona_name}] {t.content}"
+        for t in history
+    )

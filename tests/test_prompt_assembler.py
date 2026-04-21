@@ -4,7 +4,7 @@ Covers spec §4 structure and §8.2 assertions.
 """
 import pytest
 
-from empty_space.prompt_assembler import build_system_prompt
+from empty_space.prompt_assembler import build_system_prompt, build_user_message
 from empty_space.schemas import (
     Persona,
     Setting,
@@ -204,3 +204,65 @@ def test_system_prompt_setting_content_embedded(
         active_events=[],
     )
     assert hospital_setting.content in prompt
+
+
+# --- build_user_message ---
+
+def _make_turn(n: int, speaker: str, name: str, content: str):
+    from empty_space.schemas import Turn
+    return Turn(
+        turn_number=n,
+        speaker=speaker,  # type: ignore[arg-type]
+        persona_name=name,
+        content=content,
+        candidate_impressions=[],
+        prompt_system="",
+        prompt_user="",
+        raw_response="",
+        tokens_in=0,
+        tokens_out=0,
+        model="gemini-2.5-flash",
+        latency_ms=0,
+        timestamp="2026-04-21T11:30:00Z",
+        director_events_active=[],
+        parse_error=None,
+    )
+
+
+def test_user_message_turn_1_is_scene_opening():
+    msg = build_user_message(history=[])
+    assert msg == "（場景開始。）"
+
+
+def test_user_message_turn_2_single_history_line():
+    history = [_make_turn(1, "protagonist", "母親", "你回來了。")]
+    msg = build_user_message(history=history)
+    assert msg == "[Turn 1 母親] 你回來了。"
+
+
+def test_user_message_turn_3_two_history_lines_in_order():
+    history = [
+        _make_turn(1, "protagonist", "母親", "你回來了。"),
+        _make_turn(2, "counterpart", "兒子", "嗯。"),
+    ]
+    msg = build_user_message(history=history)
+    assert msg == "[Turn 1 母親] 你回來了。\n[Turn 2 兒子] 嗯。"
+
+
+def test_user_message_uses_persona_name_not_role_code():
+    history = [_make_turn(1, "protagonist", "母親", "x")]
+    msg = build_user_message(history=history)
+    assert "母親" in msg
+    assert "protagonist" not in msg
+
+
+def test_user_message_has_no_tail_anchor_or_instruction():
+    history = [
+        _make_turn(1, "protagonist", "母親", "你回來了。"),
+        _make_turn(2, "counterpart", "兒子", "嗯。"),
+    ]
+    msg = build_user_message(history=history)
+    # No directive like "說第 N 句" or "你是 母親" appended
+    assert "說第" not in msg
+    assert "你是" not in msg
+    assert msg.endswith("嗯。")
