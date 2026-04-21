@@ -3,10 +3,11 @@ from unittest.mock import MagicMock, patch
 from empty_space.llm import GeminiClient, GeminiResponse
 
 
-def _mock_response(text: str = "hello", tokens: int = 42):
+def _mock_response(text: str = "hello", tokens_in: int = 100, tokens_out: int = 42):
     r = MagicMock()
     r.text = text
-    r.usage_metadata.candidates_token_count = tokens
+    r.usage_metadata.prompt_token_count = tokens_in
+    r.usage_metadata.candidates_token_count = tokens_out
     return r
 
 
@@ -16,7 +17,8 @@ def test_gemini_client_generate_flash_default():
         mock_client_cls.return_value = mock_client
         mock_client.models.generate_content.return_value = _mock_response(
             text="主回應內容\n\n---IMPRESSIONS---\n- text: 測試\n  symbols: [a]",
-            tokens=42,
+            tokens_in=250,
+            tokens_out=42,
         )
 
         client = GeminiClient(api_key="test_key")
@@ -26,6 +28,7 @@ def test_gemini_client_generate_flash_default():
         )  # default model
 
     assert isinstance(result, GeminiResponse)
+    assert result.tokens_in == 250
     assert result.tokens_out == 42
     assert result.model == "gemini-2.5-flash"
     assert result.latency_ms >= 0
@@ -37,7 +40,8 @@ def test_gemini_client_generate_pro_for_composer():
         mock_client_cls.return_value = mock_client
         mock_client.models.generate_content.return_value = _mock_response(
             text="composer snapshot",
-            tokens=2500,
+            tokens_in=9800,
+            tokens_out=2500,
         )
 
         client = GeminiClient(api_key="test_key")
@@ -48,6 +52,7 @@ def test_gemini_client_generate_pro_for_composer():
         )
 
     assert result.model == "gemini-2.5-pro"
+    assert result.tokens_in == 9800
     assert result.tokens_out == 2500
     call_kwargs = mock_client.models.generate_content.call_args.kwargs
     assert call_kwargs["model"] == "gemini-2.5-pro"

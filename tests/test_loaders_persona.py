@@ -38,3 +38,16 @@ def test_load_nonexistent_persona_raises():
 def test_load_missing_version_raises():
     with pytest.raises(FileNotFoundError):
         load_persona("六個劇中人/母親", version="nonexistent_version")
+
+
+def test_load_persona_rejects_path_traversal():
+    """rel_path that escapes PERSONA_ROOT must raise ValueError."""
+    with pytest.raises(ValueError, match="escapes"):
+        load_persona("../../../etc", version="passwd")
+
+
+def test_load_setting_rejects_path_traversal():
+    """Same guard for load_setting."""
+    from empty_space.loaders import load_setting
+    with pytest.raises(ValueError, match="escapes"):
+        load_setting("../../../etc/passwd")

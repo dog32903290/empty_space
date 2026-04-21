@@ -6,7 +6,8 @@ rubric) and Pro (Composer) via the `model` parameter.
 Normalized response (GeminiResponse) exposes:
     - content: main text
     - raw: original SDK response (for debugging)
-    - tokens_out: int
+    - tokens_in: int (prompt token count)
+    - tokens_out: int (candidate/response token count)
     - model: str
     - latency_ms: int
 """
@@ -25,6 +26,7 @@ load_dotenv()
 class GeminiResponse:
     content: str
     raw: Any
+    tokens_in: int
     tokens_out: int
     model: str
     latency_ms: int
@@ -55,6 +57,7 @@ class GeminiClient:
         return GeminiResponse(
             content=response.text,
             raw=response,
+            tokens_in=response.usage_metadata.prompt_token_count,
             tokens_out=response.usage_metadata.candidates_token_count,
             model=model,
             latency_ms=latency_ms,

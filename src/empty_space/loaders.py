@@ -8,8 +8,27 @@ Persona directory layout example:
         關係層_兒子_baseline.yaml
 """
 import re
-from empty_space.paths import PERSONA_ROOT
+from pathlib import Path
+
+import yaml
+
+from empty_space.paths import PERSONA_ROOT, EXPERIMENTS_DIR
 from empty_space.schemas import Persona, Setting, ExperimentConfig
+
+
+def _resolve_under(root: Path, rel_path: str) -> Path:
+    """Resolve rel_path under root and reject any attempt to escape root.
+
+    Returns the resolved absolute Path. Raises ValueError if rel_path
+    walks outside root (e.g., '../../../etc/passwd').
+    """
+    root_resolved = root.resolve()
+    target = (root / rel_path).resolve()
+    if root_resolved != target and root_resolved not in target.parents:
+        raise ValueError(
+            f"rel_path escapes its root: {rel_path!r} resolves to {target}"
+        )
+    return target
 
 
 def load_persona(rel_path: str, version: str) -> Persona:
@@ -23,9 +42,10 @@ def load_persona(rel_path: str, version: str) -> Persona:
         Persona with core_text and all matching relationship_texts.
 
     Raises:
+        ValueError: if rel_path escapes PERSONA_ROOT.
         FileNotFoundError: if directory or 貫通軸 file missing.
     """
-    persona_dir = PERSONA_ROOT / rel_path
+    persona_dir = _resolve_under(PERSONA_ROOT, rel_path)
     if not persona_dir.is_dir():
         raise FileNotFoundError(f"Persona directory not found: {persona_dir}")
 
@@ -63,18 +83,18 @@ def load_setting(rel_path: str) -> Setting:
 
     Returns:
         Setting with name (filename stem) and raw YAML content.
+
+    Raises:
+        ValueError: if rel_path escapes PERSONA_ROOT.
+        FileNotFoundError: if file missing.
     """
-    setting_file = PERSONA_ROOT / rel_path
+    setting_file = _resolve_under(PERSONA_ROOT, rel_path)
     if not setting_file.exists():
         raise FileNotFoundError(f"Setting file not found: {setting_file}")
     return Setting(
         name=setting_file.stem,
         content=setting_file.read_text(encoding="utf-8"),
     )
-
-
-import yaml
-from empty_space.paths import EXPERIMENTS_DIR
 
 
 def load_experiment(exp_id: str) -> ExperimentConfig:
