@@ -49,7 +49,6 @@ class SessionState:
     setting: Setting
     turns: list[Turn] = field(default_factory=list)
     active_events: list[tuple[int, str]] = field(default_factory=list)
-    out_dir: Path | None = None
 
 
 def run_session(
@@ -69,7 +68,6 @@ def run_session(
         protagonist=protagonist,
         counterpart=counterpart,
         setting=setting,
-        out_dir=out_dir,
     )
 
     start_time = time.monotonic()
@@ -79,7 +77,7 @@ def run_session(
         # 1. speaker
         speaker_role = "protagonist" if n % 2 == 1 else "counterpart"
         speaker_persona = protagonist if speaker_role == "protagonist" else counterpart
-        counterpart_name = counterpart.name if speaker_role == "protagonist" else protagonist.name
+        other_party_name = counterpart.name if speaker_role == "protagonist" else protagonist.name
 
         # 2. director event trigger
         if n in config.director_events:
@@ -90,7 +88,7 @@ def run_session(
         # 3. prompts
         system_prompt = build_system_prompt(
             persona=speaker_persona,
-            counterpart_name=counterpart_name,
+            counterpart_name=other_party_name,
             setting=setting,
             scene_premise=config.scene_premise,
             initial_state=config.initial_state,
