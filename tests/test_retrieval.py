@@ -166,3 +166,93 @@ def test_merge_cooccurrence_does_not_mutate_inputs():
     assert a == {"X": {"Y": 1}}  # unchanged
     assert b == {"X": {"Y": 2}}  # unchanged
     assert result["X"]["Y"] == 3
+
+
+# --- extract_symbols ---
+
+from empty_space.llm import GeminiResponse
+from empty_space.retrieval import extract_symbols
+
+
+class _MockLLMClient:
+    """Minimal mock for Flash extract_symbols tests."""
+    def __init__(self, response_text: str, tokens_in: int = 100, tokens_out: int = 20, latency_ms: int = 150):
+        self.response_text = response_text
+        self.tokens_in = tokens_in
+        self.tokens_out = tokens_out
+        self.latency_ms = latency_ms
+        self.calls = []
+
+    def generate(self, *, system: str, user: str, model: str = "gemini-2.5-flash") -> GeminiResponse:
+        self.calls.append({"system": system, "user": user, "model": model})
+        return GeminiResponse(
+            content=self.response_text,
+            raw=None,
+            tokens_in=self.tokens_in,
+            tokens_out=self.tokens_out,
+            model=model,
+            latency_ms=self.latency_ms,
+        )
+
+
+def test_extract_symbols_parses_clean_yaml_list():
+    client = _MockLLMClient(response_text="- 分手\n- 女朋友\n- 拒絕\n")
+    symbols, tokens_in, tokens_out, latency = extract_symbols(
+        text="你昨晚和女朋友分手。",
+        llm_client=client,
+    )
+    assert symbols == ["分手", "女朋友", "拒絕"]
+    assert tokens_in == 100
+    assert tokens_out == 20
+    assert latency == 150
+    assert len(client.calls) == 1
+
+
+def test_extract_symbols_empty_text_skips_llm_call():
+    client = _MockLLMClient(response_text="- x\n")
+    symbols, tokens_in, tokens_out, latency = extract_symbols(
+        text="",
+        llm_client=client,
+    )
+    assert symbols == []
+    assert tokens_in == 0
+    assert tokens_out == 0
+    assert latency == 0
+    assert client.calls == []  # LLM was not called
+
+
+def test_extract_symbols_whitespace_only_text_skips_llm():
+    client = _MockLLMClient(response_text="- x\n")
+    symbols, *_ = extract_symbols(
+        text="   \n\n  ",
+        llm_client=client,
+    )
+    assert symbols == []
+    assert client.calls == []
+
+
+def test_extract_symbols_invalid_yaml_returns_empty():
+    client = _MockLLMClient(response_text="- unclosed [\n  bad")
+    symbols, _, _, _ = extract_symbols(
+        text="something",
+        llm_client=client,
+    )
+    assert symbols == []
+
+
+def test_extract_symbols_non_list_yaml_returns_empty():
+    client = _MockLLMClient(response_text="key: value\n")
+    symbols, _, _, _ = extract_symbols(
+        text="something",
+        llm_client=client,
+    )
+    assert symbols == []
+
+
+def test_extract_symbols_strips_whitespace_and_filters_empty():
+    client = _MockLLMClient(response_text="-   愧疚  \n- \n- 沉默\n")
+    symbols, _, _, _ = extract_symbols(
+        text="something",
+        llm_client=client,
+    )
+    assert symbols == ["愧疚", "沉默"]
