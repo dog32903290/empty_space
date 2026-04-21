@@ -149,3 +149,36 @@ def _append_conversation_jsonl(
     with (out_dir / "conversation.jsonl").open("a", encoding="utf-8") as f:
         for ln in lines:
             f.write(ln + "\n")
+
+
+def write_meta(
+    *,
+    out_dir: Path,
+    config: ExperimentConfig,
+    total_turns: int,
+    termination_reason: str,
+    total_tokens_in: int,
+    total_tokens_out: int,
+    total_candidate_impressions: int,
+    turns_with_parse_error: int,
+    director_events_triggered: list[tuple[int, str]],
+    models_used: list[str],
+    duration_seconds: float,
+) -> None:
+    """Write meta.yaml with session-level summary."""
+    meta = {
+        "exp_id": config.exp_id,
+        "run_timestamp": out_dir.name,
+        "total_turns": total_turns,
+        "termination_reason": termination_reason,
+        "total_tokens_in": total_tokens_in,
+        "total_tokens_out": total_tokens_out,
+        "duration_seconds": duration_seconds,
+        "total_candidate_impressions": total_candidate_impressions,
+        "turns_with_parse_error": turns_with_parse_error,
+        "director_events_triggered": [
+            {"turn": t, "content": c} for t, c in director_events_triggered
+        ],
+        "models_used": models_used,
+    }
+    _atomic_write_yaml(out_dir / "meta.yaml", meta)

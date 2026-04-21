@@ -231,3 +231,45 @@ def test_append_turn_appends_to_conversation_jsonl(tmp_path, sample_config):
     }
     assert entries[2]["turn"] == 3
     assert entries[2]["content"] == "⋯⋯"
+
+
+from empty_space.writer import write_meta
+
+
+def test_write_meta_records_all_summary_fields(tmp_path, sample_config):
+    out_dir = tmp_path / "run"
+    init_run(out_dir, sample_config)
+    # Simulate two turns
+    append_turn(out_dir, _make_turn(
+        turn_number=1, speaker="protagonist", name="母親", content="你回來了。",
+        impressions=[CandidateImpression(text="x", symbols=[])],
+    ))
+    append_turn(out_dir, _make_turn(
+        turn_number=2, speaker="counterpart", name="兒子", content="嗯。",
+        parse_error="YAML parse error: something",
+    ))
+    write_meta(
+        out_dir=out_dir,
+        config=sample_config,
+        total_turns=2,
+        termination_reason="max_turns",
+        total_tokens_in=200,
+        total_tokens_out=40,
+        total_candidate_impressions=1,
+        turns_with_parse_error=1,
+        director_events_triggered=[(3, "護士推床進來")],
+        models_used=["gemini-2.5-flash"],
+        duration_seconds=12.5,
+    )
+    meta = yaml.safe_load((out_dir / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta["exp_id"] == "test_exp_001"
+    assert meta["total_turns"] == 2
+    assert meta["termination_reason"] == "max_turns"
+    assert meta["total_tokens_in"] == 200
+    assert meta["total_tokens_out"] == 40
+    assert meta["duration_seconds"] == 12.5
+    assert meta["total_candidate_impressions"] == 1
+    assert meta["turns_with_parse_error"] == 1
+    assert meta["director_events_triggered"] == [{"turn": 3, "content": "護士推床進來"}]
+    assert meta["models_used"] == ["gemini-2.5-flash"]
+    assert "run_timestamp" in meta
