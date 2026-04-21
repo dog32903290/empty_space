@@ -6,7 +6,7 @@ lists of strings under named fields; baseline uses prose narrative).
 Rather than force a rigid schema, store raw YAML content as text and
 let the prompt assembler inject it verbatim.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -140,6 +140,7 @@ class Turn:
     timestamp: str                                 # ISO 8601 "Z" form, e.g. "2026-04-21T11:30:15Z"
     director_events_active: list[tuple[int, str]] # all events triggered so far (including this turn's)
     parse_error: str | None = None
+    retrieved_impressions: list[RetrievedImpression] = field(default_factory=list)
 
 
 @dataclass

@@ -110,6 +110,20 @@ def _turn_to_yaml_dict(turn: "Turn") -> dict:
             {"turn": t, "content": c} for t, c in turn.director_events_active
         ],
         "parse_error": turn.parse_error,
+        "retrieved_impressions": [
+            {
+                "id": imp.id,
+                "text": imp.text,
+                "symbols": list(imp.symbols),
+                "speaker": imp.speaker,
+                "persona_name": imp.persona_name,
+                "from_run": imp.from_run,
+                "from_turn": imp.from_turn,
+                "score": imp.score,
+                "matched_symbols": list(imp.matched_symbols),
+            }
+            for imp in turn.retrieved_impressions
+        ],
     }
 
 
@@ -161,6 +175,9 @@ def write_meta(
     director_events_triggered: list[tuple[int, str]],
     models_used: list[str],
     duration_seconds: float,
+    retrieval_total_tokens_in: int = 0,
+    retrieval_total_tokens_out: int = 0,
+    ledger_appends: list[dict] | None = None,
 ) -> None:
     """Write meta.yaml with session-level summary."""
     meta = {
@@ -177,5 +194,49 @@ def write_meta(
             {"turn": t, "content": c} for t, c in director_events_triggered
         ],
         "models_used": models_used,
+        "retrieval_total_tokens_in": retrieval_total_tokens_in,
+        "retrieval_total_tokens_out": retrieval_total_tokens_out,
+        "ledger_appends": ledger_appends or [],
     }
     _atomic_write_yaml(out_dir / "meta.yaml", meta)
+
+
+def write_retrieval(
+    out_dir: Path,
+    *,
+    protagonist,
+    counterpart,
+) -> None:
+    """Write retrieval.yaml with both roles' session-start retrieval outcomes."""
+    data = {
+        "protagonist": _retrieval_to_yaml_dict(protagonist),
+        "counterpart": _retrieval_to_yaml_dict(counterpart),
+    }
+    _atomic_write_yaml(out_dir / "retrieval.yaml", data)
+
+
+def _retrieval_to_yaml_dict(r) -> dict:
+    return {
+        "speaker_role": r.speaker_role,
+        "persona_name": r.persona_name,
+        "query_text": r.query_text,
+        "query_symbols": list(r.query_symbols),
+        "expanded_symbols": list(r.expanded_symbols),
+        "impressions": [
+            {
+                "id": imp.id,
+                "text": imp.text,
+                "symbols": list(imp.symbols),
+                "speaker": imp.speaker,
+                "persona_name": imp.persona_name,
+                "from_run": imp.from_run,
+                "from_turn": imp.from_turn,
+                "score": imp.score,
+                "matched_symbols": list(imp.matched_symbols),
+            }
+            for imp in r.impressions
+        ],
+        "flash_latency_ms": r.flash_latency_ms,
+        "flash_tokens_in": r.flash_tokens_in,
+        "flash_tokens_out": r.flash_tokens_out,
+    }

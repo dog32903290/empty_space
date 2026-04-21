@@ -273,3 +273,158 @@ def test_write_meta_records_all_summary_fields(tmp_path, sample_config):
     assert meta["director_events_triggered"] == [{"turn": 3, "content": "護士推床進來"}]
     assert meta["models_used"] == ["gemini-2.5-flash"]
     assert "run_timestamp" in meta
+
+
+# --- Level 2 additions ---
+
+from empty_space.schemas import RetrievalResult, RetrievedImpression
+from empty_space.writer import write_retrieval
+
+
+def _make_retrieval_result(
+    role: str = "protagonist",
+    name: str = "母親",
+    impressions: list[RetrievedImpression] | None = None,
+) -> RetrievalResult:
+    return RetrievalResult(
+        speaker_role=role,  # type: ignore[arg-type]
+        persona_name=name,
+        query_text="父親在 ICU。\n\n你昨夜夢到他。",
+        query_symbols=["父親", "ICU", "夢"],
+        expanded_symbols=["父親", "ICU", "夢", "走廊"],
+        impressions=impressions or [],
+        flash_latency_ms=250,
+        flash_tokens_in=130,
+        flash_tokens_out=28,
+    )
+
+
+def test_write_retrieval_records_both_roles(tmp_path, sample_config):
+    out_dir = tmp_path / "run"
+    init_run(out_dir, sample_config)
+
+    p = _make_retrieval_result(role="protagonist", name="母親")
+    c = _make_retrieval_result(role="counterpart", name="兒子")
+    write_retrieval(out_dir, protagonist=p, counterpart=c)
+
+    retrieval_file = out_dir / "retrieval.yaml"
+    assert retrieval_file.is_file()
+    loaded = yaml.safe_load(retrieval_file.read_text(encoding="utf-8"))
+    assert loaded["protagonist"]["persona_name"] == "母親"
+    assert loaded["protagonist"]["query_symbols"] == ["父親", "ICU", "夢"]
+    assert loaded["protagonist"]["flash_tokens_in"] == 130
+    assert loaded["counterpart"]["persona_name"] == "兒子"
+
+
+def test_write_retrieval_empty_impressions(tmp_path, sample_config):
+    out_dir = tmp_path / "run"
+    init_run(out_dir, sample_config)
+    p = _make_retrieval_result(impressions=[])
+    c = _make_retrieval_result(impressions=[])
+    write_retrieval(out_dir, protagonist=p, counterpart=c)
+
+    loaded = yaml.safe_load((out_dir / "retrieval.yaml").read_text(encoding="utf-8"))
+    assert loaded["protagonist"]["impressions"] == []
+    assert loaded["counterpart"]["impressions"] == []
+
+
+def test_write_retrieval_records_impression_details(tmp_path, sample_config):
+    out_dir = tmp_path / "run"
+    init_run(out_dir, sample_config)
+    imp = RetrievedImpression(
+        id="imp_042",
+        text="她的沉默比辯解都沉",
+        symbols=("沉默", "辯解"),
+        speaker="counterpart",
+        persona_name="兒子",
+        from_run="prev/2026-04-20T09-00-00",
+        from_turn=8,
+        score=1,
+        matched_symbols=("沉默",),
+    )
+    p = _make_retrieval_result(impressions=[imp])
+    c = _make_retrieval_result(impressions=[])
+    write_retrieval(out_dir, protagonist=p, counterpart=c)
+
+    loaded = yaml.safe_load((out_dir / "retrieval.yaml").read_text(encoding="utf-8"))
+    imp_data = loaded["protagonist"]["impressions"][0]
+    assert imp_data["id"] == "imp_042"
+    assert imp_data["text"] == "她的沉默比辯解都沉"
+    assert imp_data["symbols"] == ["沉默", "辯解"]
+    assert imp_data["matched_symbols"] == ["沉默"]
+    assert imp_data["from_turn"] == 8
+    assert imp_data["score"] == 1
+
+
+def test_append_turn_records_retrieved_impressions_field(tmp_path, sample_config):
+    out_dir = tmp_path / "run"
+    init_run(out_dir, sample_config)
+    imp = RetrievedImpression(
+        id="imp_007",
+        text="她走路時肩膀稍微往前",
+        symbols=("肩膀", "前傾"),
+        speaker="counterpart",
+        persona_name="兒子",
+        from_run="prev/x",
+        from_turn=3,
+        score=1,
+        matched_symbols=("肩膀",),
+    )
+    from empty_space.schemas import Turn as _Turn
+    turn = _Turn(
+        turn_number=1,
+        speaker="protagonist",
+        persona_name="母親",
+        content="話。",
+        candidate_impressions=[],
+        prompt_system="sys",
+        prompt_user="user",
+        raw_response="話。",
+        tokens_in=10,
+        tokens_out=5,
+        model="gemini-2.5-flash",
+        latency_ms=100,
+        timestamp="2026-04-21T11:30:00Z",
+        director_events_active=[],
+        parse_error=None,
+        retrieved_impressions=[imp],
+    )
+    append_turn(out_dir, turn)
+
+    loaded = yaml.safe_load((out_dir / "turns" / "turn_001.yaml").read_text(encoding="utf-8"))
+    assert "retrieved_impressions" in loaded
+    assert len(loaded["retrieved_impressions"]) == 1
+    assert loaded["retrieved_impressions"][0]["id"] == "imp_007"
+    assert loaded["retrieved_impressions"][0]["text"] == "她走路時肩膀稍微往前"
+
+
+def test_write_meta_records_retrieval_and_ledger_fields(tmp_path, sample_config):
+    out_dir = tmp_path / "run"
+    init_run(out_dir, sample_config)
+
+    write_meta(
+        out_dir=out_dir,
+        config=sample_config,
+        total_turns=2,
+        termination_reason="max_turns",
+        total_tokens_in=100,
+        total_tokens_out=20,
+        total_candidate_impressions=3,
+        turns_with_parse_error=0,
+        director_events_triggered=[],
+        models_used=["gemini-2.5-flash"],
+        duration_seconds=5.0,
+        retrieval_total_tokens_in=250,
+        retrieval_total_tokens_out=55,
+        ledger_appends=[
+            {"relationship": "母親_x_兒子", "speaker": "protagonist",
+             "persona_name": "母親", "candidates_added": 2, "new_ledger_version": 3},
+            {"relationship": "母親_x_兒子", "speaker": "counterpart",
+             "persona_name": "兒子", "candidates_added": 1, "new_ledger_version": 3},
+        ],
+    )
+    meta = yaml.safe_load((out_dir / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta["retrieval_total_tokens_in"] == 250
+    assert meta["retrieval_total_tokens_out"] == 55
+    assert len(meta["ledger_appends"]) == 2
+    assert meta["ledger_appends"][0]["candidates_added"] == 2
