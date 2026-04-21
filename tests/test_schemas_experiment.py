@@ -7,6 +7,7 @@ from empty_space.schemas import (
 )
 
 
+
 def test_experiment_config_full_construction():
     config = ExperimentConfig(
         exp_id="mother_x_son_hospital_v3_001",
@@ -71,3 +72,39 @@ def test_director_events_accepts_int_keys():
     )
     assert 3 in config.director_events
     assert config.director_events[10] == "event B"
+
+
+def test_experiment_accepts_protagonist_prelude():
+    config = ExperimentConfig(
+        exp_id="x",
+        protagonist=PersonaRef(path="p", version="v"),
+        counterpart=PersonaRef(path="q", version="v"),
+        setting=SettingRef(path="s.yaml"),
+        protagonist_prelude="你昨夜夢到他小時候被帶走。",
+        initial_state=InitialState(verb="v", stage="s", mode="m"),
+    )
+    assert config.protagonist_prelude == "你昨夜夢到他小時候被帶走。"
+
+
+def test_experiment_accepts_counterpart_prelude():
+    config = ExperimentConfig(
+        exp_id="x",
+        protagonist=PersonaRef(path="p", version="v"),
+        counterpart=PersonaRef(path="q", version="v"),
+        setting=SettingRef(path="s.yaml"),
+        counterpart_prelude="你昨晚和女朋友分手。",
+        initial_state=InitialState(verb="v", stage="s", mode="m"),
+    )
+    assert config.counterpart_prelude == "你昨晚和女朋友分手。"
+
+
+def test_experiment_preludes_default_to_None():
+    config = ExperimentConfig(
+        exp_id="x",
+        protagonist=PersonaRef(path="p", version="v"),
+        counterpart=PersonaRef(path="q", version="v"),
+        setting=SettingRef(path="s.yaml"),
+        initial_state=InitialState(verb="v", stage="s", mode="m"),
+    )
+    assert config.protagonist_prelude is None
+    assert config.counterpart_prelude is None

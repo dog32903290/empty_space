@@ -68,6 +68,8 @@ class ExperimentConfig(BaseModel):
     counterpart: PersonaRef
     setting: SettingRef
     scene_premise: str | None = None
+    protagonist_prelude: str | None = None
+    counterpart_prelude: str | None = None
     initial_state: InitialState
     director_events: dict[int, str] = Field(default_factory=dict)
     max_turns: int = 20
@@ -81,6 +83,43 @@ class CandidateImpression:
     """A single impression line emitted by the role LLM (unvetted until Phase 4 rubric)."""
     text: str
     symbols: list[str]
+
+
+@dataclass
+class LedgerEntry:
+    """One candidate impression persisted in a ledger."""
+    id: str                              # imp_001, imp_002, ...
+    text: str
+    symbols: list[str]
+    from_run: str                        # e.g. mother_x_son_hospital_v3_001/2026-04-21T10-24-12
+    from_turn: int
+    created: str                         # ISO 8601
+
+
+@dataclass
+class Ledger:
+    """In-memory representation of a single <relationship>.from_<persona>.yaml."""
+    relationship: str
+    speaker: Literal["protagonist", "counterpart"]
+    persona_name: str
+    ledger_version: int
+    candidates: list[LedgerEntry]
+    symbol_index: dict[str, list[str]]         # symbol → [imp_id, ...]
+    cooccurrence: dict[str, dict[str, int]]    # symbol_a → symbol_b → count
+
+
+@dataclass(frozen=True)
+class RetrievedImpression:
+    """Read from ledger; what went into the '你的內在' block."""
+    id: str
+    text: str
+    symbols: tuple[str, ...]             # tuple for frozen hashability
+    speaker: Literal["protagonist", "counterpart"]
+    persona_name: str
+    from_run: str
+    from_turn: int
+    score: int                           # len(matched_symbols)
+    matched_symbols: tuple[str, ...]     # canonical 形式的交集
 
 
 @dataclass
@@ -113,3 +152,17 @@ class SessionResult:
     total_tokens_in: int
     total_tokens_out: int
     duration_seconds: float
+
+
+@dataclass
+class RetrievalResult:
+    """Session-start retrieval outcome for one role."""
+    speaker_role: Literal["protagonist", "counterpart"]
+    persona_name: str
+    query_text: str                      # scene_premise + prelude joined
+    query_symbols: list[str]             # Flash extract 原始輸出
+    expanded_symbols: list[str]          # + co-occurrence 鄰居
+    impressions: list[RetrievedImpression]
+    flash_latency_ms: int
+    flash_tokens_in: int
+    flash_tokens_out: int
