@@ -276,12 +276,9 @@ def run_session_start_retrieval(
         top_neighbors_per_seed=2,
     )
 
-    # Step 4: retrieve top N
-    # Use original query_symbols so matched_symbols reflects the seed intent,
-    # not the co-occurrence expansions (expansion broadens recall but the
-    # matched_symbols field should show which original symbol triggered the hit).
+    # Step 4: retrieve top N (use expanded symbols so co-occurrence neighbors count)
     impressions = retrieve_top_n(
-        query_symbols=query_symbols,
+        query_symbols=expanded_symbols,
         ledger_a=ledger_self,
         ledger_b=ledger_other,
         synonym_map=synonym_map,

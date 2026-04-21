@@ -475,8 +475,13 @@ def test_run_session_start_retrieval_full_flow(tmp_path, monkeypatch):
 
     assert result.query_symbols == ["愧疚", "母愛"]
     assert "愧疚" in result.expanded_symbols
+    # Co-occurrence expansion pulls 愧疚's neighbors (沉默, 辯解) into the query.
+    # Entry [沉默, 辯解, 愧疚] now matches all three expanded symbols.
+    assert "沉默" in result.expanded_symbols
+    assert "辯解" in result.expanded_symbols
     assert len(result.impressions) == 1
     assert result.impressions[0].text == "她的沉默在這一刻比任何辯解都沉"
-    assert result.impressions[0].matched_symbols == ("愧疚",)
+    assert result.impressions[0].score == 3
+    assert set(result.impressions[0].matched_symbols) == {"愧疚", "沉默", "辯解"}
     assert result.impressions[0].speaker == "counterpart"
     assert result.flash_tokens_in > 0
