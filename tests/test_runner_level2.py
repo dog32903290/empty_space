@@ -135,13 +135,17 @@ def test_second_session_retrieval_hits_first_session_impressions(redirect_all_di
     result_2 = run_session(config=config, llm_client=client)
 
     ret_2 = yaml.safe_load((result_2.out_dir / "retrieval.yaml").read_text(encoding="utf-8"))
-    # Should hit session 1's refined
+    # Should hit session 1's refined — B strategy: each speaker reads only their own
     p_texts = [imp["text"] for imp in ret_2["protagonist"]["impressions"]]
     c_texts = [imp["text"] for imp in ret_2["counterpart"]["impressions"]]
-    # Protagonist should see both (A strategy: shared memory across speaker ledgers)
-    assert "醫院走廊長" in p_texts or "父親的門" in p_texts
+    # Protagonist sees own refined: "醫院走廊長" (symbols=[醫院])
+    assert "醫院走廊長" in p_texts
+    # Counterpart sees own refined: "父親的門" (symbols=[父親])
+    assert "父親的門" in c_texts
     # All impression ids should start with ref_ (refined, not raw)
     for imp in ret_2["protagonist"]["impressions"]:
+        assert imp["id"].startswith("ref_")
+    for imp in ret_2["counterpart"]["impressions"]:
         assert imp["id"].startswith("ref_")
 
 
@@ -176,14 +180,15 @@ def test_llm_exception_aborts_session_no_ledger_written(redirect_all_dirs):
 
 
 def test_pre_seeded_ledger_hits_system_prompt(redirect_all_dirs):
-    """預先 seed refined ledger (not raw, since Level 3 retrieval reads refined)。"""
+    """預先 seed protagonist's own refined ledger (B strategy: reads only self)。"""
     from empty_space.ledger import append_refined_impressions
     from empty_space.schemas import RefinedImpressionDraft
 
+    # B strategy: seed protagonist's OWN ledger so it appears in protagonist's retrieval
     append_refined_impressions(
         relationship="母親_x_兒子",
-        speaker_role="counterpart",
-        persona_name="兒子",
+        speaker_role="protagonist",
+        persona_name="母親",
         drafts=[
             RefinedImpressionDraft(
                 text="她的手不動，像假的",
@@ -226,10 +231,11 @@ def test_synonym_map_enables_variant_matching(redirect_all_dirs, tmp_path, monke
 
     from empty_space.ledger import append_refined_impressions
     from empty_space.schemas import RefinedImpressionDraft
+    # B strategy: seed protagonist's own ledger so protagonist's retrieval can hit it
     append_refined_impressions(
         relationship="母親_x_兒子",
-        speaker_role="counterpart",
-        persona_name="兒子",
+        speaker_role="protagonist",
+        persona_name="母親",
         drafts=[
             RefinedImpressionDraft(
                 text="她看著地板，沒看我",

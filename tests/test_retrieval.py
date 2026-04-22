@@ -461,7 +461,7 @@ def test_run_session_start_retrieval_empty_query_returns_empty(tmp_path, monkeyp
 
 
 def test_run_session_start_retrieval_full_flow(tmp_path, monkeypatch):
-    # Pre-populate a refined ledger (retrieval now reads refined, not raw)
+    # Pre-populate protagonist's own refined ledger (B strategy: reads only self)
     from empty_space.ledger import append_refined_impressions
     from empty_space.schemas import RefinedImpressionDraft
 
@@ -469,8 +469,8 @@ def test_run_session_start_retrieval_full_flow(tmp_path, monkeypatch):
 
     append_refined_impressions(
         relationship="母親_x_兒子",
-        speaker_role="counterpart",
-        persona_name="兒子",
+        speaker_role="protagonist",
+        persona_name="母親",
         drafts=[
             RefinedImpressionDraft(
                 text="她的沉默在這一刻比任何辯解都沉",
@@ -496,7 +496,7 @@ def test_run_session_start_retrieval_full_flow(tmp_path, monkeypatch):
 
     assert result.query_symbols == ["愧疚", "母愛"]
     assert "愧疚" in result.expanded_symbols
-    # Co-occurrence expansion pulls 愧疚's neighbors (沉默, 辯解) into the query.
+    # Co-occurrence expansion pulls 愧疚's neighbors (沉默, 辯解) from self's graph.
     # Entry [沉默, 辯解, 愧疚] now matches all three expanded symbols.
     assert "沉默" in result.expanded_symbols
     assert "辯解" in result.expanded_symbols
@@ -504,7 +504,7 @@ def test_run_session_start_retrieval_full_flow(tmp_path, monkeypatch):
     assert result.impressions[0].text == "她的沉默在這一刻比任何辯解都沉"
     assert result.impressions[0].score == 3
     assert set(result.impressions[0].matched_symbols) == {"愧疚", "沉默", "辯解"}
-    assert result.impressions[0].speaker == "counterpart"
+    assert result.impressions[0].speaker == "protagonist"
     assert result.impressions[0].from_turn is None  # refined has no from_turn
     assert result.flash_tokens_in > 0
 
@@ -545,16 +545,16 @@ def test_retrieve_top_n_works_with_refined_impressions():
 
 
 def test_run_session_start_retrieval_reads_refined_ledger(tmp_path, monkeypatch):
-    """Session-start retrieval should now read refined ledger (not raw)."""
+    """Session-start retrieval reads only self's refined ledger (B strategy — private memory)."""
     monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path)
 
-    # Pre-seed only refined (not raw) — verifies retrieval reads refined, not raw
+    # Seed PROTAGONIST's own refined ledger (not counterpart's)
     from empty_space.ledger import append_refined_impressions
     from empty_space.schemas import RefinedImpressionDraft
     append_refined_impressions(
         relationship="母親_x_兒子",
-        speaker_role="counterpart",
-        persona_name="兒子",
+        speaker_role="protagonist",  # seeds PROTAGONIST's own ledger
+        persona_name="母親",
         drafts=[RefinedImpressionDraft(text="沉默時肩膀垂下", symbols=["沉默", "肩膀"], source_raw_ids=["imp_005"])],
         source_run="prev/t",
     )
@@ -575,8 +575,41 @@ def test_run_session_start_retrieval_reads_refined_ledger(tmp_path, monkeypatch)
         llm_client=client,
     )
 
-    # Should hit the refined impression (not raw — no raw was seeded)
+    # Protagonist should hit their own refined impression
     assert len(result.impressions) == 1
     assert result.impressions[0].text == "沉默時肩膀垂下"
     assert result.impressions[0].id == "ref_001"
     assert result.impressions[0].from_turn is None
+
+
+def test_run_session_start_retrieval_private_memory_does_not_leak(tmp_path, monkeypatch):
+    """B strategy: counterpart's refined should NOT leak into protagonist's retrieval."""
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path)
+    monkeypatch.setattr("empty_space.retrieval.DEFAULT_SYNONYMS_PATH", tmp_path / "nonexistent")
+
+    from empty_space.ledger import append_refined_impressions
+    from empty_space.schemas import RefinedImpressionDraft
+    # Seed ONLY counterpart's ledger
+    append_refined_impressions(
+        relationship="母親_x_兒子",
+        speaker_role="counterpart",
+        persona_name="兒子",
+        drafts=[RefinedImpressionDraft(text="他的背像一道牆", symbols=["背", "牆"], source_raw_ids=[])],
+        source_run="prev/t",
+    )
+
+    client = _MockLLMClient(response_text="- 背\n- 牆\n")
+
+    # Protagonist queries — should NOT see counterpart's refined
+    result = run_session_start_retrieval(
+        speaker_role="protagonist",
+        persona_name="母親",
+        query_text="記憶",
+        relationship="母親_x_兒子",
+        other_persona_name="兒子",
+        synonym_map={},
+        llm_client=client,
+    )
+
+    # B strategy: protagonist's own ledger is empty, so no impressions
+    assert result.impressions == []

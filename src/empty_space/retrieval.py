@@ -1,5 +1,8 @@
 """Session-start retrieval: extract symbols → expand via co-occurrence →
-score candidates in both ledgers → return top-3 per role.
+score candidates in self's ledger only → return top-3 per role.
+
+B strategy (private memory): each speaker reads only their own refined ledger.
+Counterpart's refined is never shown to this speaker.
 """
 import re
 from pathlib import Path
@@ -254,10 +257,13 @@ def run_session_start_retrieval(
 ) -> RetrievalResult:
     """Full session-start retrieval pipeline for one role.
 
+    B strategy: private memory — reads only self's refined ledger.
+    Counterpart's refined is never shown to this speaker.
+
     1. Flash extract symbols from query_text.
-    2. Load both refined ledgers (self + other).
-    3. Expand with merged cooccurrence (1-hop).
-    4. Score refined impressions in both ledgers, return top N.
+    2. Load only self's refined ledger (B strategy: private memory).
+    3. Expand with self's cooccurrence graph (1-hop).
+    4. Score refined impressions in self's ledger only, return top N.
     5. Package as RetrievalResult (with debug info).
     """
     from empty_space.ledger import read_refined_ledger  # local import
@@ -267,28 +273,25 @@ def run_session_start_retrieval(
         text=query_text, llm_client=llm_client,
     )
 
-    # Step 2: load refined ledgers
+    # Step 2: load only self's refined ledger (B strategy: private memory)
     refined_self = read_refined_ledger(relationship=relationship, persona_name=persona_name)
-    refined_other = read_refined_ledger(relationship=relationship, persona_name=other_persona_name)
-    other_role = "counterpart" if speaker_role == "protagonist" else "protagonist"
 
-    # Step 3: expand
-    merged_cooc = merge_cooccurrence(refined_self.cooccurrence, refined_other.cooccurrence)
+    # Step 3: expand using only self's cooccurrence graph (private graph)
     expanded_symbols = expand_with_cooccurrence(
         seed_symbols=query_symbols,
-        cooccurrence=merged_cooc,
+        cooccurrence=refined_self.cooccurrence,
         top_neighbors_per_seed=2,
     )
 
-    # Step 4: retrieve top N (use expanded symbols so co-occurrence neighbors count)
+    # Step 4: retrieve top N from self's ledger only (B strategy: no other-side impressions)
     impressions = retrieve_top_n(
         query_symbols=expanded_symbols,
         entries_a=refined_self.impressions,
-        entries_b=refined_other.impressions,
+        entries_b=[],  # B strategy: no counterpart impressions
         speaker_a=speaker_role,
         persona_name_a=persona_name,
-        speaker_b=other_role,
-        persona_name_b=other_persona_name,
+        speaker_b="counterpart" if speaker_role == "protagonist" else "protagonist",
+        persona_name_b=other_persona_name,  # kept for signature consistency; entries_b is empty
         synonym_map=synonym_map,
         top_n=top_n,
     )
