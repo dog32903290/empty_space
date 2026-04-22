@@ -84,9 +84,11 @@ def test_initial_state_legacy_mode_baseline_migrated():
 
 def test_judge_runs_twice_per_turn_for_both_speakers():
     """4-turn session → 8 Judge calls (2 per turn)."""
-    # Call sequence: 2 extract + 4 dialogue + 4*2 judge + 1 composer = 15
+    # Call sequence: 2 extract + 2 infer + 4 dialogue + 4*2 judge + 1 composer = 19
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話1", "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
         "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
         "話2", "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
@@ -101,8 +103,8 @@ def test_judge_runs_twice_per_turn_for_both_speakers():
     client = MockLLMClient(responses)
     run_session(config=config, llm_client=client)
 
-    # Count Judge calls by matching system prompt containing 隱性量測者
-    judge_calls = [c for c in client.calls if "隱性量測者" in c["system"]]
+    # Count Judge calls by matching system prompt containing 隱性量測者 but NOT containing "現在場景還沒開演" (which is infer)
+    judge_calls = [c for c in client.calls if "隱性量測者" in c["system"] and "現在場景還沒開演" not in c["system"]]
     assert len(judge_calls) == 8
 
 
@@ -113,6 +115,8 @@ def test_judge_state_evolves_across_turns():
     # In turn 3 P's system prompt 此刻 should now read 初感訊號/收
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         # turn 1 — protagonist speaks
         "話1_P",
         "STAGE: 初感訊號\nMODE: 收\nWHY: 縮肩\nVERDICT: N/A\nHITS: 肩下沉\n",
@@ -148,6 +152,8 @@ def test_judge_verb_evolves_across_turns():
     # protagonist 承受（靠近）→ 承受（等待）→ 承受（退回）
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         # turn 1 protagonist
         "話1",
         "STAGE: 初感訊號\nMODE: 收\nVERB: 承受（等待）\nWHY: x\nVERDICT: N/A\nHITS: -\n",
@@ -256,6 +262,8 @@ def test_meta_yaml_includes_judge_trajectories_and_health():
     """After 2-turn session, meta should have both trajectories and health stats."""
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話1", "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
         "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
         "話2", "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
@@ -282,6 +290,8 @@ def test_dual_basin_lock_terminates_session_early():
     # max_turns=10 but both speakers basin_lock from turn 1 → should stop at turn 2 (need 2 consecutive)
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話1",
         "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
         "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
@@ -303,6 +313,8 @@ def test_single_basin_lock_does_not_terminate():
     # max_turns=2 to keep small; counterpart always N/A
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話1",
         "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
         "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
@@ -326,6 +338,8 @@ def test_interactive_peak_injects_director_event(monkeypatch):
 
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話1_P",
         "STAGE: 半意識浮現\nMODE: 放\nWHY: 爆發\nVERDICT: fire_release\nHITS: -\n",
         "STAGE: 前置積累\nMODE: 在\nWHY: -\nVERDICT: N/A\nHITS: -\n",
@@ -367,6 +381,8 @@ def test_non_interactive_peak_does_not_prompt(monkeypatch):
 
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話1",
         "STAGE: 半意識浮現\nMODE: 放\nWHY: 爆\nVERDICT: fire_release\nHITS: -\n",
         "STAGE: 前置積累\nMODE: 在\nWHY: -\nVERDICT: N/A\nHITS: -\n",
@@ -395,6 +411,8 @@ def test_peak_priority_fire_beats_basin(monkeypatch):
 
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話1",
         # protagonist basin_lock
         "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",

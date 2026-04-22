@@ -66,8 +66,10 @@ def test_happy_path_runs_all_turns(minimal_config, tmp_path, monkeypatch):
     monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
 
     responses = [
-        "- 醫院\n- 父親\n",   # NEW: protagonist extract_symbols
-        "- 醫院\n- 父親\n",   # NEW: counterpart extract_symbols
+        "- 醫院\n- 父親\n",   # protagonist extract_symbols
+        "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",  # protagonist infer
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",  # counterpart infer
         "你回來了。",
         _JS, _JS,  # Judge both after turn 1
         "嗯。",
@@ -100,6 +102,8 @@ def test_speaker_alternation_mother_starts(minimal_config, tmp_path, monkeypatch
     client = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "你回來了。", _JS, _JS,
         "嗯。", _JS, _JS,
         "⋯⋯", _JS, _JS,
@@ -125,18 +129,20 @@ def test_system_prompt_contains_correct_persona_per_turn(minimal_config, tmp_pat
     client = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols (call 0)
         "- 醫院\n- 父親\n",   # counterpart extract_symbols (call 1)
-        "a", _JS, _JS,        # turn 1 (call 2) + Judge both (calls 3-4)
-        "b", _JS, _JS,        # turn 2 (call 5) + Judge both (calls 6-7)
-        "c", _JS, _JS,        # turn 3 (call 8) + Judge both (calls 9-10)
-        "d", _JS, _JS,        # turn 4 (call 11) + Judge both (calls 12-13)
-        "母親: []\n兒子: []\n",  # composer noop (call 14)
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",  # protagonist infer (call 2)
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",  # counterpart infer (call 3)
+        "a", _JS, _JS,        # turn 1 (call 4) + Judge both (calls 5-6)
+        "b", _JS, _JS,        # turn 2 (call 7) + Judge both (calls 8-9)
+        "c", _JS, _JS,        # turn 3 (call 10) + Judge both (calls 11-12)
+        "d", _JS, _JS,        # turn 4 (call 13) + Judge both (calls 14-15)
+        "母親: []\n兒子: []\n",  # composer noop (call 16)
     ])
     run_session(config=minimal_config, llm_client=client)
 
-    # Calls 0-1 are extract_symbols; Turn 1 is call 2 (母親/protagonist)
-    assert "## 關係層：對兒子" in client.calls[2]["system"]
-    # Turn 2 is call 5 (兒子/counterpart) — calls 3-4 are Judge calls after turn 1
-    assert "## 關係層：對母親" in client.calls[5]["system"]
+    # Calls 0-3 are extract_symbols + infer; Turn 1 is call 4 (母親/protagonist)
+    assert "## 關係層：對兒子" in client.calls[4]["system"]
+    # Turn 2 is call 7 (兒子/counterpart) — calls 5-6 are Judge calls after turn 1
+    assert "## 關係層：對母親" in client.calls[7]["system"]
 
 
 def test_candidate_impressions_extracted_and_stored(minimal_config, tmp_path, monkeypatch):
@@ -145,6 +151,8 @@ def test_candidate_impressions_extracted_and_stored(minimal_config, tmp_path, mo
     responses = [
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         """你回來了。
 
 ---IMPRESSIONS---
@@ -186,6 +194,8 @@ def test_director_event_injected_into_system_from_trigger_turn(
         # skips the LLM call → no prepended extract responses needed.
     )
     client = MockLLMClient([
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",  # protagonist infer
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",  # counterpart infer
         "a", _JS, _JS,  # turn 1 + Judge
         "b", _JS, _JS,  # turn 2 + Judge
         "c", _JS, _JS,  # turn 3 + Judge
@@ -195,15 +205,15 @@ def test_director_event_injected_into_system_from_trigger_turn(
     ])
     run_session(config=config, llm_client=client)
 
-    # No extract_symbols calls (empty query).
-    # Call indices: turn1=0, turn2=3, turn3=6, turn4=9, turn5=12
+    # No extract_symbols calls (empty query), but 2 infer calls (calls 0-1).
+    # Call indices: turn1=2, turn2=5, turn3=8, turn4=11, turn5=14
     # Turn 1-2 system prompts should NOT contain the event (it triggers at Turn 3)
-    assert "護士推一張空床進病房" not in client.calls[0]["system"]
-    assert "護士推一張空床進病房" not in client.calls[3]["system"]
+    assert "護士推一張空床進病房" not in client.calls[2]["system"]
+    assert "護士推一張空床進病房" not in client.calls[5]["system"]
     # Turn 3 onwards SHOULD contain it
-    assert "Turn 3：護士推一張空床進病房" in client.calls[6]["system"]
-    assert "Turn 3：護士推一張空床進病房" in client.calls[9]["system"]
-    assert "Turn 3：護士推一張空床進病房" in client.calls[12]["system"]
+    assert "Turn 3：護士推一張空床進病房" in client.calls[8]["system"]
+    assert "Turn 3：護士推一張空床進病房" in client.calls[11]["system"]
+    assert "Turn 3：護士推一張空床進病房" in client.calls[14]["system"]
 
 
 def test_director_events_accumulate_across_turns(tmp_path, monkeypatch):
@@ -220,6 +230,8 @@ def test_director_events_accumulate_across_turns(tmp_path, monkeypatch):
         # No scene_premise/preludes → no extract_symbols LLM calls.
     )
     client = MockLLMClient([
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",  # protagonist infer
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",  # counterpart infer
         "a", _JS, _JS,  # turn 1 + Judge
         "b", _JS, _JS,  # turn 2 + Judge
         "c", _JS, _JS,  # turn 3 + Judge
@@ -229,8 +241,8 @@ def test_director_events_accumulate_across_turns(tmp_path, monkeypatch):
     ])
     run_session(config=config, llm_client=client)
 
-    # No extract_symbols calls. Turn 5 dialogue is call index 12.
-    sys5 = client.calls[12]["system"]
+    # No extract_symbols calls, but 2 infer calls (calls 0-1). Turn 5 dialogue is call index 14.
+    sys5 = client.calls[14]["system"]
     assert "Turn 2：event A" in sys5
     assert "Turn 4：event B" in sys5
     assert sys5.index("Turn 2：event A") < sys5.index("Turn 4：event B")
@@ -254,6 +266,8 @@ def test_parse_error_recorded_but_session_continues(tmp_path, monkeypatch):
 - text: "unclosed
 """
     client = MockLLMClient([
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         broken_yaml_response, _JS, _JS,
         "嗯。", _JS, _JS,
         "⋯⋯", _JS, _JS,
@@ -278,6 +292,8 @@ def test_max_turns_terminates_session(tmp_path, monkeypatch, minimal_config):
     client = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "a", _JS, _JS,
         "b", _JS, _JS,
         "母親: []\n兒子: []\n",  # composer noop
@@ -301,10 +317,11 @@ def test_llm_exception_aborts_session_partial_turns_kept(
         def generate(self, *, system, user, model="gemini-2.5-flash"):
             self.call_count += 1
             # Calls 1-2 are extract_symbols (protagonist + counterpart).
-            # Call 3 = turn 1 dialogue, calls 4-5 = Judge P+C.
-            # Call 6 = turn 2 dialogue, calls 7-8 = Judge P+C.
-            # Call 9 = turn 3 dialogue → BOOM.
-            if self.call_count == 9:
+            # Calls 3-4 are infer_initial_state (protagonist + counterpart).
+            # Call 5 = turn 1 dialogue, calls 6-7 = Judge P+C.
+            # Call 8 = turn 2 dialogue, calls 9-10 = Judge P+C.
+            # Call 11 = turn 3 dialogue → BOOM.
+            if self.call_count == 11:
                 raise RuntimeError("network boom")
             # Judge calls return valid stay responses
             if "隱性量測者" in system:
@@ -349,6 +366,8 @@ def test_two_runs_of_same_exp_create_distinct_timestamp_dirs(
     client1 = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "a", _JS, _JS,
         "b", _JS, _JS,
         "c", _JS, _JS,
@@ -364,6 +383,8 @@ def test_two_runs_of_same_exp_create_distinct_timestamp_dirs(
     client2 = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "x", _JS, _JS,
         "y", _JS, _JS,
         "z", _JS, _JS,
@@ -386,6 +407,8 @@ def test_composer_runs_at_session_end(minimal_config, tmp_path, monkeypatch):
 
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "你回來了。", _JS, _JS,
         "嗯。", _JS, _JS,
         "⋯⋯", _JS, _JS,
@@ -416,6 +439,8 @@ def test_composer_failure_doesnt_break_session(minimal_config, tmp_path, monkeyp
 
     responses = [
         "- 醫院\n", "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         # Include impression in turn 1 so raw ledger gets written
         "a\n\n---IMPRESSIONS---\n- text: \"raw impression\"\n  symbols: [醫院]\n",
         _JS, _JS,
@@ -450,6 +475,8 @@ def test_second_session_retrieval_reads_refined(minimal_config, tmp_path, monkey
     # Session 1
     responses_1 = [
         "- 醫院\n- 父親\n", "- 醫院\n- 父親\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "a", _JS, _JS,
         "b", _JS, _JS,
         "c", _JS, _JS,
@@ -461,6 +488,8 @@ def test_second_session_retrieval_reads_refined(minimal_config, tmp_path, monkey
     # Session 2
     responses_2 = [
         "- 醫院\n", "- 父親\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "e", _JS, _JS,
         "f", _JS, _JS,
         "g", _JS, _JS,

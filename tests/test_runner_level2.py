@@ -80,6 +80,8 @@ def test_first_session_empty_ledgers_written_after(redirect_all_dirs):
     responses = [
         "- 醫院\n- 父親\n",
         "- 醫院\n- 父親\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話一\n\n---IMPRESSIONS---\n- text: \"母親印象一\"\n  symbols: [A, B]\n",
         _JS, _JS,  # Judge for both after turn 1
         "話二\n\n---IMPRESSIONS---\n- text: \"兒子印象一\"\n  symbols: [C, D]\n",
@@ -121,6 +123,8 @@ def test_second_session_retrieval_hits_first_session_impressions(redirect_all_di
     responses_1 = [
         "- 醫院\n",
         "- 醫院\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話一\n\n---IMPRESSIONS---\n- text: \"母親印象\"\n  symbols: [醫院, 父親]\n",
         _JS, _JS,  # Judge for both after turn 1
         "話二\n\n---IMPRESSIONS---\n- text: \"兒子印象\"\n  symbols: [醫院, 父親]\n",
@@ -134,6 +138,8 @@ def test_second_session_retrieval_hits_first_session_impressions(redirect_all_di
     responses_2 = [
         "- 醫院\n- 父親\n",
         "- 醫院\n- 父親\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
         "話三",
         _JS, _JS,  # Judge for both after turn 3
         "話四",
@@ -167,9 +173,9 @@ def test_llm_exception_aborts_session_no_ledger_written(redirect_all_dirs):
             self.count = 0
         def generate(self, *, system, user, model="gemini-2.5-flash"):
             self.count += 1
-            # Let the 2 extract calls + 2 dialogue turns + 4 judge calls succeed,
-            # blow up on turn 3 dialogue (call 9)
-            if self.count == 9:
+            # Let the 2 extract calls + 2 infer calls + 2 dialogue turns + 4 judge calls succeed,
+            # blow up on turn 3 dialogue (call 11)
+            if self.count == 11:
                 raise RuntimeError("boom")
             if self.count <= 2:
                 return GeminiResponse(
