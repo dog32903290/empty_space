@@ -129,8 +129,6 @@ def _build_new_state(
     )
 
 
-# --- YAML parsers for persona v3 files ---
-
 # --- tolerant output parser ---
 
 _VERDICT_VALUES = {"fire_release", "basin_lock", "N/A"}
@@ -152,6 +150,10 @@ def parse_judge_output(text: str, *, last_state: JudgeState) -> JudgeResult:
     - Stage/mode name substring/superstring of a canonical name → fuzzy match
     - Missing field → fallback to last_state (and mark parse_status)
     - Completely unparseable → fallback_used for all fields
+    - parse_status values:
+        "ok": all three critical fields (STAGE/MODE/VERDICT) extracted (WHY/HITS don't affect status)
+        "partial": at least one critical field missing but some found
+        "fallback_used": no fields parsed at all
     """
     lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
 
@@ -194,11 +196,22 @@ def _extract_field(lines: list[str], prefixes: list[str]) -> str | None:
 
 
 def _normalise_stage(raw: str, fallback: str) -> str:
-    """Fuzzy match to STAGE_ORDER. Exact match preferred; then substring both ways."""
+    """Fuzzy match to STAGE_ORDER.
+
+    Priority:
+    1. Exact match.
+    2. Canonical stage name is a substring of raw (e.g., "明確切換期" → "明確切換").
+    3. Raw is substring of canonical, but ONLY if raw is at least 2 chars and
+       within 1 char of canonical length (prevents "前" → "前置積累").
+    4. Fallback to last_state.stage.
+    """
     if raw in STAGE_ORDER:
         return raw
     for s in STAGE_ORDER:
-        if s in raw or (raw and raw in s):
+        if s in raw:
+            return s
+    for s in STAGE_ORDER:
+        if raw and len(raw) >= 2 and len(raw) >= len(s) - 1 and raw in s:
             return s
     return fallback
 

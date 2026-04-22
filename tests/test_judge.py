@@ -250,7 +250,7 @@ VERDICT: N/A
     last = _state()
     r = parse_judge_output(text, last_state=last)
     assert r.hits == []
-    assert r.meta["parse_status"] in ("ok", "partial")
+    assert r.meta["parse_status"] == "ok"
 
 
 def test_parse_judge_output_totally_broken_falls_back():
@@ -286,3 +286,16 @@ HITS: x
     last = _state()
     r = parse_judge_output(text, last_state=last)
     assert r.proposed_verdict == "N/A"
+
+
+def test_parse_judge_output_single_char_stage_falls_back():
+    """Short junk like '前' must not match '前置積累' — should fallback to last."""
+    text = """STAGE: 前
+MODE: 收
+WHY: x
+VERDICT: N/A
+HITS: -
+"""
+    last = _state(stage="半意識浮現", mode="在")
+    r = parse_judge_output(text, last_state=last)
+    assert r.proposed_stage == "半意識浮現"   # fallback
