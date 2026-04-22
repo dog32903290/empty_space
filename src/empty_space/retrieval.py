@@ -164,35 +164,40 @@ def extract_symbols(
 # --- scoring & top-N retrieval ---
 
 from empty_space.schemas import (
-    Ledger,
-    LedgerEntry,
     RetrievedImpression,
     RetrievalResult,
 )
-from empty_space.ledger import read_ledger
 
 
 def retrieve_top_n(
     *,
     query_symbols: list[str],
-    ledger_a: Ledger,
-    ledger_b: Ledger,
+    entries_a: list,  # list of LedgerEntry or RefinedImpression
+    entries_b: list,
+    speaker_a: str,
+    persona_name_a: str,
+    speaker_b: str,
+    persona_name_b: str,
     synonym_map: dict[str, str],
     top_n: int = 3,
 ) -> list[RetrievedImpression]:
-    """Score candidates in both ledgers via symbol hit count under canonical
-    equivalence. Return top N by (score desc, created desc). Dedup by
-    (speaker, id).
+    """Score entries across two lists. Works with either LedgerEntry (raw)
+    or RefinedImpression (refined) — both have id, text, symbols, from_run, created.
+
+    For entries without from_turn attribute, from_turn is set to None in
+    the resulting RetrievedImpression.
     """
     canon_q = {canonicalize(s, synonym_map) for s in query_symbols}
     if not canon_q:
         return []
 
-    # Score every entry in both ledgers that has at least one match
-    scored: list[tuple[int, str, LedgerEntry, Ledger, list[str]]] = []
-    # (score, created, entry, ledger, matched_canonicals_sorted)
-    for ledger in (ledger_a, ledger_b):
-        for entry in ledger.candidates:
+    scored: list[tuple[int, str, object, str, str, list[str]]] = []
+    # (score, created, entry, speaker, persona_name, matched_sorted)
+    for entries, speaker, persona_name in (
+        (entries_a, speaker_a, persona_name_a),
+        (entries_b, speaker_b, persona_name_b),
+    ):
+        for entry in entries:
             canon_e = {canonicalize(s, synonym_map) for s in entry.symbols}
             matched = canon_q & canon_e
             if matched:
@@ -200,30 +205,31 @@ def retrieve_top_n(
                     len(matched),
                     entry.created,
                     entry,
-                    ledger,
+                    speaker,
+                    persona_name,
                     sorted(matched),
                 ))
 
-    # Multi-key sort via Python's stable sort: apply tiebreaker first, primary last
-    scored.sort(key=lambda t: t[1], reverse=True)   # created desc (tiebreaker)
-    scored.sort(key=lambda t: t[0], reverse=True)   # score desc (primary)
+    scored.sort(key=lambda t: t[1], reverse=True)   # tiebreaker: created desc
+    scored.sort(key=lambda t: t[0], reverse=True)   # primary: score desc
 
-    # Dedup by (speaker, id)
     seen_keys: set[tuple[str, str]] = set()
     result: list[RetrievedImpression] = []
-    for score, _, entry, ledger, matched in scored:
-        key = (ledger.speaker, entry.id)
+    for score, _, entry, speaker, persona_name, matched in scored:
+        key = (speaker, entry.id)
         if key in seen_keys:
             continue
         seen_keys.add(key)
+        # from_turn may not exist on RefinedImpression
+        from_turn = getattr(entry, "from_turn", None)
         result.append(RetrievedImpression(
             id=entry.id,
             text=entry.text,
             symbols=tuple(entry.symbols),
-            speaker=ledger.speaker,
-            persona_name=ledger.persona_name,
+            speaker=speaker,  # type: ignore[arg-type]
+            persona_name=persona_name,
             from_run=entry.from_run,
-            from_turn=entry.from_turn,
+            from_turn=from_turn,
             score=score,
             matched_symbols=tuple(matched),
         ))
@@ -249,27 +255,25 @@ def run_session_start_retrieval(
     """Full session-start retrieval pipeline for one role.
 
     1. Flash extract symbols from query_text.
-    2. Load both ledgers (self + other).
+    2. Load both refined ledgers (self + other).
     3. Expand with merged cooccurrence (1-hop).
-    4. Score candidates in both ledgers, return top N.
+    4. Score refined impressions in both ledgers, return top N.
     5. Package as RetrievalResult (with debug info).
     """
+    from empty_space.ledger import read_refined_ledger  # local import
+
     # Step 1: extract
     query_symbols, tokens_in, tokens_out, latency_ms = extract_symbols(
         text=query_text, llm_client=llm_client,
     )
 
-    # Step 2: load ledgers
-    ledger_self = read_ledger(relationship=relationship, persona_name=persona_name)
-    ledger_other = read_ledger(relationship=relationship, persona_name=other_persona_name)
-
-    # Set correct speaker on ledgers (read_ledger uses placeholder when file missing)
-    ledger_self = _with_speaker(ledger_self, speaker_role)
+    # Step 2: load refined ledgers
+    refined_self = read_refined_ledger(relationship=relationship, persona_name=persona_name)
+    refined_other = read_refined_ledger(relationship=relationship, persona_name=other_persona_name)
     other_role = "counterpart" if speaker_role == "protagonist" else "protagonist"
-    ledger_other = _with_speaker(ledger_other, other_role)
 
     # Step 3: expand
-    merged_cooc = merge_cooccurrence(ledger_self.cooccurrence, ledger_other.cooccurrence)
+    merged_cooc = merge_cooccurrence(refined_self.cooccurrence, refined_other.cooccurrence)
     expanded_symbols = expand_with_cooccurrence(
         seed_symbols=query_symbols,
         cooccurrence=merged_cooc,
@@ -279,8 +283,12 @@ def run_session_start_retrieval(
     # Step 4: retrieve top N (use expanded symbols so co-occurrence neighbors count)
     impressions = retrieve_top_n(
         query_symbols=expanded_symbols,
-        ledger_a=ledger_self,
-        ledger_b=ledger_other,
+        entries_a=refined_self.impressions,
+        entries_b=refined_other.impressions,
+        speaker_a=speaker_role,
+        persona_name_a=persona_name,
+        speaker_b=other_role,
+        persona_name_b=other_persona_name,
         synonym_map=synonym_map,
         top_n=top_n,
     )
@@ -295,23 +303,4 @@ def run_session_start_retrieval(
         flash_latency_ms=latency_ms,
         flash_tokens_in=tokens_in,
         flash_tokens_out=tokens_out,
-    )
-
-
-def _with_speaker(ledger: Ledger, speaker: str) -> Ledger:
-    """Return a new Ledger with .speaker overridden.
-
-    Used for empty ledgers read from missing files (read_ledger uses a
-    placeholder speaker since the speaker_role isn't knowable from path alone).
-    """
-    if ledger.speaker == speaker:
-        return ledger
-    return Ledger(
-        relationship=ledger.relationship,
-        speaker=speaker,  # type: ignore[arg-type]
-        persona_name=ledger.persona_name,
-        ledger_version=ledger.ledger_version,
-        candidates=ledger.candidates,
-        symbol_index=ledger.symbol_index,
-        cooccurrence=ledger.cooccurrence,
     )

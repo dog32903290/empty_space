@@ -264,6 +264,26 @@ from empty_space.schemas import Ledger, LedgerEntry
 from empty_space.retrieval import retrieve_top_n, run_session_start_retrieval
 
 
+def _retrieve_with_ledgers(query_symbols, ledger_a, ledger_b, synonym_map, top_n=3):
+    """Test helper — adapts old ledger-based tests to new entries-based signature."""
+    # Works for both Ledger (raw: .candidates) and RefinedLedger (refined: .impressions)
+    _ca = getattr(ledger_a, "candidates", None)
+    entries_a = _ca if _ca is not None else ledger_a.impressions
+    _cb = getattr(ledger_b, "candidates", None)
+    entries_b = _cb if _cb is not None else ledger_b.impressions
+    return retrieve_top_n(
+        query_symbols=query_symbols,
+        entries_a=entries_a,
+        entries_b=entries_b,
+        speaker_a=ledger_a.speaker,
+        persona_name_a=ledger_a.persona_name,
+        speaker_b=ledger_b.speaker,
+        persona_name_b=ledger_b.persona_name,
+        synonym_map=synonym_map,
+        top_n=top_n,
+    )
+
+
 def _make_ledger(
     *,
     speaker: str = "protagonist",
@@ -297,7 +317,7 @@ def _make_entry(id: str, text: str, symbols: list[str], created: str = "2026-04-
 
 
 def test_retrieve_empty_ledgers_returns_empty():
-    result = retrieve_top_n(
+    result = _retrieve_with_ledgers(
         query_symbols=["A", "B"],
         ledger_a=_make_ledger(),
         ledger_b=_make_ledger(persona_name="兒子", speaker="counterpart"),
@@ -313,7 +333,7 @@ def test_retrieve_single_ledger_hit():
     ledger_a = _make_ledger(entries=[e1, e2])
     ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
 
-    result = retrieve_top_n(
+    result = _retrieve_with_ledgers(
         query_symbols=["A"],
         ledger_a=ledger_a,
         ledger_b=ledger_b,
@@ -335,7 +355,7 @@ def test_retrieve_cross_ledger_dedup_by_speaker_and_id():
     ledger_a = _make_ledger(entries=[e_a])
     ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart", entries=[e_b])
 
-    result = retrieve_top_n(
+    result = _retrieve_with_ledgers(
         query_symbols=["A"],
         ledger_a=ledger_a,
         ledger_b=ledger_b,
@@ -354,7 +374,7 @@ def test_retrieve_sorts_by_score_desc():
     ledger_a = _make_ledger(entries=[e_high, e_low])
     ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
 
-    result = retrieve_top_n(
+    result = _retrieve_with_ledgers(
         query_symbols=["A", "B", "C"],
         ledger_a=ledger_a,
         ledger_b=ledger_b,
@@ -372,7 +392,7 @@ def test_retrieve_tiebreak_by_created_desc():
     ledger_a = _make_ledger(entries=[e_old, e_new])
     ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
 
-    result = retrieve_top_n(
+    result = _retrieve_with_ledgers(
         query_symbols=["A"],
         ledger_a=ledger_a,
         ledger_b=ledger_b,
@@ -390,7 +410,7 @@ def test_retrieve_synonym_map_matches_variants():
     ledger_a = _make_ledger(entries=[e])
     ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
 
-    result = retrieve_top_n(
+    result = _retrieve_with_ledgers(
         query_symbols=["愧疚"],
         ledger_a=ledger_a,
         ledger_b=ledger_b,
@@ -406,7 +426,7 @@ def test_retrieve_top_n_truncates():
     ledger_a = _make_ledger(entries=entries)
     ledger_b = _make_ledger(persona_name="兒子", speaker="counterpart")
 
-    result = retrieve_top_n(
+    result = _retrieve_with_ledgers(
         query_symbols=["A"],
         ledger_a=ledger_a,
         ledger_b=ledger_b,
@@ -441,21 +461,22 @@ def test_run_session_start_retrieval_empty_query_returns_empty(tmp_path, monkeyp
 
 
 def test_run_session_start_retrieval_full_flow(tmp_path, monkeypatch):
-    # Pre-populate a ledger via ledger.append_session_candidates
-    from empty_space.ledger import append_session_candidates
-    from empty_space.schemas import CandidateImpression
+    # Pre-populate a refined ledger (retrieval now reads refined, not raw)
+    from empty_space.ledger import append_refined_impressions
+    from empty_space.schemas import RefinedImpressionDraft
 
     monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path)
 
-    append_session_candidates(
+    append_refined_impressions(
         relationship="母親_x_兒子",
         speaker_role="counterpart",
         persona_name="兒子",
-        candidates=[
-            (8, CandidateImpression(
+        drafts=[
+            RefinedImpressionDraft(
                 text="她的沉默在這一刻比任何辯解都沉",
                 symbols=["沉默", "辯解", "愧疚"],
-            )),
+                source_raw_ids=["imp_008"],
+            ),
         ],
         source_run="prev_exp/2026-04-21T09-00-00",
     )
@@ -484,4 +505,78 @@ def test_run_session_start_retrieval_full_flow(tmp_path, monkeypatch):
     assert result.impressions[0].score == 3
     assert set(result.impressions[0].matched_symbols) == {"愧疚", "沉默", "辯解"}
     assert result.impressions[0].speaker == "counterpart"
+    assert result.impressions[0].from_turn is None  # refined has no from_turn
     assert result.flash_tokens_in > 0
+
+
+# --- Level 3: retrieval from refined ---
+
+from empty_space.schemas import RefinedImpression
+
+
+def _make_refined(id: str, text: str, symbols: list[str], created: str = "2026-04-22T10:00:00Z") -> RefinedImpression:
+    return RefinedImpression(
+        id=id, text=text, symbols=symbols,
+        speaker="protagonist", persona_name="母親",
+        from_run="r/t", source_raw_ids=[], created=created,
+    )
+
+
+def test_retrieve_top_n_works_with_refined_impressions():
+    """retrieve_top_n should accept list of RefinedImpression (not just LedgerEntry)."""
+    refined = [
+        _make_refined("ref_001", "沉默時喉嚨收緊", ["沉默", "喉嚨"]),
+        _make_refined("ref_002", "手指在膝上按壓", ["手指", "膝"]),
+    ]
+    result = retrieve_top_n(
+        query_symbols=["沉默"],
+        entries_a=refined,
+        entries_b=[],
+        speaker_a="protagonist",
+        persona_name_a="母親",
+        speaker_b="counterpart",
+        persona_name_b="兒子",
+        synonym_map={},
+        top_n=3,
+    )
+    assert len(result) == 1
+    assert result[0].id == "ref_001"
+    assert result[0].from_turn is None   # refined has no single turn
+
+
+def test_run_session_start_retrieval_reads_refined_ledger(tmp_path, monkeypatch):
+    """Session-start retrieval should now read refined ledger (not raw)."""
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path)
+
+    # Pre-seed only refined (not raw) — verifies retrieval reads refined, not raw
+    from empty_space.ledger import append_refined_impressions
+    from empty_space.schemas import RefinedImpressionDraft
+    append_refined_impressions(
+        relationship="母親_x_兒子",
+        speaker_role="counterpart",
+        persona_name="兒子",
+        drafts=[RefinedImpressionDraft(text="沉默時肩膀垂下", symbols=["沉默", "肩膀"], source_raw_ids=["imp_005"])],
+        source_run="prev/t",
+    )
+
+    # Skip synonym file
+    monkeypatch.setattr("empty_space.retrieval.DEFAULT_SYNONYMS_PATH", tmp_path / "nonexistent")
+
+    # Mock extract_symbols Flash response
+    client = _MockLLMClient(response_text="- 沉默\n")
+
+    result = run_session_start_retrieval(
+        speaker_role="protagonist",
+        persona_name="母親",
+        query_text="你在想什麼",
+        relationship="母親_x_兒子",
+        other_persona_name="兒子",
+        synonym_map={},
+        llm_client=client,
+    )
+
+    # Should hit the refined impression (not raw — no raw was seeded)
+    assert len(result.impressions) == 1
+    assert result.impressions[0].text == "沉默時肩膀垂下"
+    assert result.impressions[0].id == "ref_001"
+    assert result.impressions[0].from_turn is None
