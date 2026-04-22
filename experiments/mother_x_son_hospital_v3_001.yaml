@@ -22,7 +22,7 @@ counterpart_prelude: |
 initial_state:
   verb: 承受（靠近）
   stage: 前置積累
-  mode: 基線
+  mode: 在
 
 director_events: {}
 
