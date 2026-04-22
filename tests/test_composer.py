@@ -297,10 +297,10 @@ def test_build_composer_prompt_user_contains_raw_ids():
     assert "imp_002" in user
 
 
-def test_build_composer_prompt_system_mentions_atomic_and_first_person():
+def test_build_composer_prompt_system_mentions_narrative_and_first_person():
     system, _ = build_composer_prompt(_minimal_input())
-    # Keywords from the spec prompt
-    assert "atomic" in system.lower() or "短" in system
+    # New prompt emphasizes narrative anchors + first-person
+    assert "敘事" in system or "事件" in system
     assert "第一人稱" in system
 
 
