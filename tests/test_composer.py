@@ -309,3 +309,156 @@ def test_build_composer_prompt_user_contains_persona_names():
     # User message should have the persona names as section labels
     assert "母親" in user
     assert "兒子" in user
+
+
+# --- run_composer orchestrator ---
+
+from empty_space.composer import run_composer
+from empty_space.llm import GeminiResponse
+from empty_space.ledger import read_refined_ledger
+
+
+class _MockLLMForComposer:
+    def __init__(self, response_text: str, tokens_in: int = 2000, tokens_out: int = 500, latency_ms: int = 15000):
+        self.response_text = response_text
+        self.tokens_in = tokens_in
+        self.tokens_out = tokens_out
+        self.latency_ms = latency_ms
+        self.calls = []
+
+    def generate(self, *, system, user, model="gemini-2.5-pro"):
+        self.calls.append({"system": system, "user": user, "model": model})
+        return GeminiResponse(
+            content=self.response_text, raw=None,
+            tokens_in=self.tokens_in, tokens_out=self.tokens_out,
+            model=model, latency_ms=self.latency_ms,
+        )
+
+
+def test_run_composer_happy_path(tmp_path, monkeypatch):
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "conversation.md").write_text(
+        "**Turn 1 · 母親**\n你回來了。\n", encoding="utf-8",
+    )
+
+    turns = [
+        _make_turn(1, "protagonist", "母親", "你回來了。",
+                   candidates=[CandidateImpression(text="她的手動了", symbols=["手"])]),
+        _make_turn(2, "counterpart", "兒子", "嗯。",
+                   candidates=[CandidateImpression(text="他沒看她", symbols=["目光"])]),
+    ]
+
+    client = _MockLLMForComposer(response_text="""母親:
+  - text: "手動了"
+    symbols: [手]
+    source_raw_ids: [imp_001]
+
+兒子:
+  - text: "沒看她"
+    symbols: [目光]
+    source_raw_ids: [imp_002]
+""")
+
+    result = run_composer(
+        relationship="母親_x_兒子",
+        protagonist_name="母親",
+        counterpart_name="兒子",
+        out_dir=out_dir,
+        session_turns=turns,
+        new_raw_ids={"protagonist": ["imp_001"], "counterpart": ["imp_002"]},
+        source_run="exp/2026-04-22T10-00-00",
+        llm_client=client,
+    )
+
+    assert result.parse_error is None
+    assert result.protagonist_refined_added == 1
+    assert result.counterpart_refined_added == 1
+    assert result.tokens_in > 0
+    assert result.tokens_out > 0
+    assert len(client.calls) == 1
+    assert client.calls[0]["model"] == "gemini-2.5-pro"
+
+    # Verify refined ledgers written
+    p_ledger = read_refined_ledger(relationship="母親_x_兒子", persona_name="母親")
+    c_ledger = read_refined_ledger(relationship="母親_x_兒子", persona_name="兒子")
+    assert p_ledger.ledger_version == 1
+    assert c_ledger.ledger_version == 1
+    assert p_ledger.impressions[0].text == "手動了"
+    assert c_ledger.impressions[0].text == "沒看她"
+
+
+def test_run_composer_pro_exception_caught(tmp_path, monkeypatch):
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "conversation.md").write_text("", encoding="utf-8")
+
+    class ExplodingClient:
+        def generate(self, *, system, user, model="gemini-2.5-pro"):
+            raise RuntimeError("pro api down")
+
+    result = run_composer(
+        relationship="R", protagonist_name="母親", counterpart_name="兒子",
+        out_dir=out_dir, session_turns=[],
+        new_raw_ids={"protagonist": [], "counterpart": []},
+        source_run="exp/t", llm_client=ExplodingClient(),
+    )
+
+    assert result.parse_error is not None
+    assert "pro api down" in result.parse_error or "RuntimeError" in result.parse_error
+    assert result.protagonist_refined_added == 0
+    assert result.counterpart_refined_added == 0
+    # No ledgers written
+    assert not (tmp_path / "ledgers" / "R.refined.from_母親.yaml").exists()
+
+
+def test_run_composer_bad_yaml_returns_zero_appends(tmp_path, monkeypatch):
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "conversation.md").write_text("", encoding="utf-8")
+
+    client = _MockLLMForComposer(response_text="garbage [[[ not yaml")
+    result = run_composer(
+        relationship="R", protagonist_name="母親", counterpart_name="兒子",
+        out_dir=out_dir, session_turns=[],
+        new_raw_ids={"protagonist": [], "counterpart": []},
+        source_run="exp/t", llm_client=client,
+    )
+
+    assert result.parse_error is not None
+    assert result.protagonist_refined_added == 0
+    assert result.counterpart_refined_added == 0
+
+
+def test_run_composer_partial_success_only_protagonist(tmp_path, monkeypatch):
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "conversation.md").write_text("", encoding="utf-8")
+
+    client = _MockLLMForComposer(response_text="""母親:
+  - text: "only mother"
+    symbols: [a]
+    source_raw_ids: []
+
+兒子: []
+""")
+    result = run_composer(
+        relationship="R", protagonist_name="母親", counterpart_name="兒子",
+        out_dir=out_dir, session_turns=[],
+        new_raw_ids={"protagonist": [], "counterpart": []},
+        source_run="exp/t", llm_client=client,
+    )
+
+    assert result.parse_error is None
+    assert result.protagonist_refined_added == 1
+    assert result.counterpart_refined_added == 0
+
+    # Protagonist ledger written, counterpart not
+    p_path = tmp_path / "ledgers" / "R.refined.from_母親.yaml"
+    c_path = tmp_path / "ledgers" / "R.refined.from_兒子.yaml"
+    assert p_path.exists()
+    assert not c_path.exists()  # empty drafts → no file created (per append_refined_impressions)

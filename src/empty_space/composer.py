@@ -7,10 +7,11 @@ from pathlib import Path
 
 import yaml
 
-from empty_space.ledger import read_refined_ledger
+from empty_space.ledger import append_refined_impressions, read_refined_ledger
 from empty_space.schemas import (
     CandidateImpression,
     ComposerInput,
+    ComposerSessionResult,
     RefinedImpressionDraft,
     Turn,
 )
@@ -253,3 +254,82 @@ def _format_refined_list(refined) -> str:
         symbols_str = ", ".join(imp.symbols) if imp.symbols else ""
         lines.append(f"- {imp.id}: {imp.text} [symbols: {symbols_str}]")
     return "\n".join(lines)
+
+
+def run_composer(
+    *,
+    relationship: str,
+    protagonist_name: str,
+    counterpart_name: str,
+    out_dir: Path,
+    session_turns: list[Turn],
+    new_raw_ids: dict[str, list[str]],
+    source_run: str,
+    llm_client,
+) -> ComposerSessionResult:
+    """Top-level Composer orchestrator. Called by runner at session end.
+
+    On any exception: returns ComposerSessionResult with parse_error set,
+    tokens zero, no refined appended. Raw ledgers remain intact upstream.
+
+    On success: produces 0-6 refined impressions per speaker, appends to
+    two refined ledgers, returns counts and tokens for meta.yaml.
+    """
+    try:
+        # 1. Gather input
+        input_bundle = gather_composer_input(
+            relationship=relationship,
+            protagonist_name=protagonist_name,
+            counterpart_name=counterpart_name,
+            out_dir=out_dir,
+            session_turns=session_turns,
+            new_raw_ids=new_raw_ids,
+        )
+
+        # 2. Build prompt
+        system, user = build_composer_prompt(input_bundle)
+
+        # 3. Pro bake
+        resp = llm_client.generate(system=system, user=user, model=COMPOSER_MODEL)
+
+        # 4. Parse output
+        p_drafts, c_drafts, parse_err = parse_composer_output(
+            resp.content,
+            protagonist_name=protagonist_name,
+            counterpart_name=counterpart_name,
+        )
+
+        # 5. Append to two ledgers
+        append_refined_impressions(
+            relationship=relationship,
+            speaker_role="protagonist",
+            persona_name=protagonist_name,
+            drafts=p_drafts,
+            source_run=source_run,
+        )
+        append_refined_impressions(
+            relationship=relationship,
+            speaker_role="counterpart",
+            persona_name=counterpart_name,
+            drafts=c_drafts,
+            source_run=source_run,
+        )
+
+        return ComposerSessionResult(
+            tokens_in=resp.tokens_in,
+            tokens_out=resp.tokens_out,
+            latency_ms=resp.latency_ms,
+            protagonist_refined_added=len(p_drafts),
+            counterpart_refined_added=len(c_drafts),
+            parse_error=parse_err,
+        )
+
+    except Exception as e:
+        return ComposerSessionResult(
+            tokens_in=0,
+            tokens_out=0,
+            latency_ms=0,
+            protagonist_refined_added=0,
+            counterpart_refined_added=0,
+            parse_error=f"composer exception: {type(e).__name__}: {e}",
+        )
