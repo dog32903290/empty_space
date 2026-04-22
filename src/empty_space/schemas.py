@@ -110,14 +110,18 @@ class Ledger:
 
 @dataclass(frozen=True)
 class RetrievedImpression:
-    """Read from ledger; what went into the '你的內在' block."""
+    """Read from ledger; what went into the '你的內在' block.
+
+    from_turn is None when this impression came from a refined ledger
+    (refined impressions are multi-turn consolidations, not single-turn).
+    """
     id: str
     text: str
     symbols: tuple[str, ...]             # tuple for frozen hashability
     speaker: Literal["protagonist", "counterpart"]
     persona_name: str
     from_run: str
-    from_turn: int
+    from_turn: int | None
     score: int                           # len(matched_symbols)
     matched_symbols: tuple[str, ...]     # canonical 形式的交集
 
@@ -167,3 +171,67 @@ class RetrievalResult:
     flash_latency_ms: int
     flash_tokens_in: int
     flash_tokens_out: int
+
+
+@dataclass
+class RefinedImpression:
+    """Composer-refined impression. One record of consolidated memory.
+
+    Unlike CandidateImpression/LedgerEntry, this has no from_turn (refined is
+    multi-turn integration) but has source_raw_ids (provenance pointing back
+    to which raw candidates contributed).
+    """
+    id: str                              # ref_001, ref_002, ...
+    text: str                            # 短 atomic, 第一人稱
+    symbols: list[str]
+    speaker: Literal["protagonist", "counterpart"]
+    persona_name: str
+    from_run: str                        # exp_id/timestamp
+    source_raw_ids: list[str]            # which raws contributed (best-effort)
+    created: str                         # ISO 8601
+
+
+@dataclass
+class RefinedLedger:
+    """In-memory representation of <relationship>.refined.from_<persona>.yaml."""
+    relationship: str
+    speaker: Literal["protagonist", "counterpart"]
+    persona_name: str
+    ledger_version: int
+    impressions: list[RefinedImpression]
+    symbol_index: dict[str, list[str]]
+    cooccurrence: dict[str, dict[str, int]]
+
+
+@dataclass
+class RefinedImpressionDraft:
+    """Pre-id draft parsed from Composer output (no id/created/from_run yet).
+
+    Assigned id and metadata when appended via append_refined_impressions.
+    """
+    text: str
+    symbols: list[str]
+    source_raw_ids: list[str]
+
+
+@dataclass
+class ComposerSessionResult:
+    """Return from run_composer. Feeds meta.yaml."""
+    tokens_in: int
+    tokens_out: int
+    latency_ms: int
+    protagonist_refined_added: int
+    counterpart_refined_added: int
+    parse_error: str | None = None
+
+
+@dataclass
+class ComposerInput:
+    """Materials gathered for Composer. Passed to build_composer_prompt."""
+    relationship: str
+    protagonist_name: str
+    counterpart_name: str
+    conversation_text: str
+    new_candidates: dict[str, list[CandidateImpression]]     # speaker → list
+    new_candidate_ids: dict[str, list[str]]                  # speaker → raw ids (same order)
+    existing_refined: dict[str, list[RefinedImpression]]     # speaker → last 30
