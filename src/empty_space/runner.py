@@ -559,14 +559,16 @@ def _is_peak(state: "SessionState") -> tuple[bool, str]:
     """Return (is_peak, triggered_by) for the most recently completed turn.
 
     Peak = any speaker's last_verdict is fire_release or basin_lock.
+    Priority: fire_release > basin_lock (fire more urgent); protagonist > counterpart (tiebreak).
     """
     jp, jc = state.judge_state_protagonist, state.judge_state_counterpart
+    # Fire first (urgency), then basin
     if jp and is_fire_release(jp):
         return True, "fire_release on protagonist"
-    if jp and is_basin_lock(jp):
-        return True, "basin_lock on protagonist"
     if jc and is_fire_release(jc):
         return True, "fire_release on counterpart"
+    if jp and is_basin_lock(jp):
+        return True, "basin_lock on protagonist"
     if jc and is_basin_lock(jc):
         return True, "basin_lock on counterpart"
     return False, ""

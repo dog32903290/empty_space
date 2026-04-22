@@ -323,3 +323,34 @@ def test_non_interactive_peak_does_not_prompt(monkeypatch):
     client = MockLLMClient(responses)
     run_session(config=config, llm_client=client, interactive=False)
     assert called["count"] == 0
+
+
+def test_peak_priority_fire_beats_basin(monkeypatch):
+    """When protagonist=basin_lock and counterpart=fire_release same turn,
+    triggered_by should be fire_release on counterpart (fire > basin)."""
+    import empty_space.runner as runner_mod
+    captured = {"triggered_by": None}
+
+    def capture_prompt(*, turn_number, state_p, state_c, triggered_by):
+        captured["triggered_by"] = triggered_by
+        return None   # skip event injection, we just want to capture the label
+
+    monkeypatch.setattr(runner_mod, "_prompt_for_director_event", capture_prompt)
+
+    responses = [
+        "- 醫院\n", "- 醫院\n",
+        "話1",
+        # protagonist basin_lock
+        "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
+        # counterpart fire_release
+        "STAGE: 半意識浮現\nMODE: 放\nWHY: y\nVERDICT: fire_release\nHITS: -\n",
+        "話2",
+        "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 半意識浮現\nMODE: 放\nWHY: -\nVERDICT: N/A\nHITS: -\n",
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=2)
+    client = MockLLMClient(responses)
+    run_session(config=config, llm_client=client, interactive=True)
+
+    assert captured["triggered_by"] == "fire_release on counterpart"
