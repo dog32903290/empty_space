@@ -260,3 +260,66 @@ def test_single_basin_lock_does_not_terminate():
     result = run_session(config=config, llm_client=client)
     assert result.total_turns == 2
     assert result.termination_reason == "max_turns"
+
+
+def test_interactive_peak_injects_director_event(monkeypatch):
+    """In interactive mode, fire_release triggers stdin prompt; event injected to next turn."""
+    import empty_space.runner as runner_mod
+    monkeypatch.setattr(runner_mod, "_prompt_for_director_event",
+                        lambda **kw: "護士開門")
+
+    responses = [
+        "- 醫院\n", "- 醫院\n",
+        "話1_P",
+        "STAGE: 半意識浮現\nMODE: 放\nWHY: 爆發\nVERDICT: fire_release\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: -\nVERDICT: N/A\nHITS: -\n",
+        "話2_C",
+        "STAGE: 半意識浮現\nMODE: 放\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: -\nVERDICT: N/A\nHITS: -\n",
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=2)
+    client = MockLLMClient(responses)
+    result = run_session(config=config, llm_client=client, interactive=True)
+
+    # Turn 2 system prompt should contain the injected event under 現場/已發生的事
+    turn_2 = yaml.safe_load(
+        (result.out_dir / "turns" / "turn_002.yaml").read_text(encoding="utf-8")
+    )
+    assert "護士開門" in turn_2["prompt_assembled"]["system"]
+    # Turn 1 yaml should have director_injection recorded
+    turn_1 = yaml.safe_load(
+        (result.out_dir / "turns" / "turn_001.yaml").read_text(encoding="utf-8")
+    )
+    assert turn_1["director_injection"]["event"] == "護士開門"
+    # meta.interactive_mode should be True
+    meta = yaml.safe_load((result.out_dir / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta["interactive_mode"] is True
+    assert len(meta["director_injections"]) == 1
+
+
+def test_non_interactive_peak_does_not_prompt(monkeypatch):
+    """Without --interactive flag, fire_release does NOT block stdin."""
+    import empty_space.runner as runner_mod
+    called = {"count": 0}
+
+    def boom(**kw):
+        called["count"] += 1
+        return None
+
+    monkeypatch.setattr(runner_mod, "_prompt_for_director_event", boom)
+
+    responses = [
+        "- 醫院\n", "- 醫院\n",
+        "話1",
+        "STAGE: 半意識浮現\nMODE: 放\nWHY: 爆\nVERDICT: fire_release\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: -\nVERDICT: N/A\nHITS: -\n",
+        "話2",
+        "STAGE: 半意識浮現\nMODE: 放\nWHY: -\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: -\nVERDICT: N/A\nHITS: -\n",
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=2)
+    client = MockLLMClient(responses)
+    run_session(config=config, llm_client=client, interactive=False)
+    assert called["count"] == 0

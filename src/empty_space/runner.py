@@ -81,7 +81,7 @@ class SessionState:
 
 
 def run_session(
-    *, config: ExperimentConfig, llm_client: LLMClient
+    *, config: ExperimentConfig, llm_client: LLMClient, interactive: bool = False
 ) -> SessionResult:
     """Run one experiment session end-to-end."""
     protagonist = load_persona(config.protagonist.path, version=config.protagonist.version)
@@ -217,11 +217,35 @@ def run_session(
         # Level 4: run Judge for both speakers after this turn
         judge_out_p, judge_out_c = _run_judges_post_turn(state, llm_client)
 
+        # Level 4: interactive peak hook (may inject director event for next turn)
+        director_injection = None
+        if interactive:
+            peak, triggered_by = _is_peak(state)
+            if peak:
+                event_text = _prompt_for_director_event(
+                    turn_number=n,
+                    state_p=state.judge_state_protagonist,
+                    state_c=state.judge_state_counterpart,
+                    triggered_by=triggered_by,
+                )
+                if event_text:
+                    next_turn = n + 1
+                    state.config.director_events[next_turn] = event_text
+                    director_injection = {
+                        "event": event_text,
+                        "triggered_by": triggered_by,
+                        "applied_to_turn": next_turn,
+                    }
+                    state.director_injections.append({
+                        "turn": n, "event": event_text, "triggered_by": triggered_by,
+                    })
+
         # 7. append
         append_turn(
             out_dir, turn,
             judge_output_protagonist=judge_out_p,
             judge_output_counterpart=judge_out_c,
+            director_injection=director_injection,
         )
 
         # Level 4: termination check
@@ -297,7 +321,7 @@ def run_session(
         judge_health=_build_judge_health(state),
         termination_turn=len(state.turns),
         director_injections=list(state.director_injections),
-        interactive_mode=False,   # Task 13 will override via run_session's interactive kwarg
+        interactive_mode=interactive,
     )
 
     return SessionResult(
@@ -529,6 +553,44 @@ def _should_terminate(state: "SessionState", consecutive_required: int = 2) -> t
     if last_n_all_basin(jp, consecutive_required) and last_n_all_basin(jc, consecutive_required):
         return True, "dual_basin_lock"
     return False, ""
+
+
+def _is_peak(state: "SessionState") -> tuple[bool, str]:
+    """Return (is_peak, triggered_by) for the most recently completed turn.
+
+    Peak = any speaker's last_verdict is fire_release or basin_lock.
+    """
+    jp, jc = state.judge_state_protagonist, state.judge_state_counterpart
+    if jp and is_fire_release(jp):
+        return True, "fire_release on protagonist"
+    if jp and is_basin_lock(jp):
+        return True, "basin_lock on protagonist"
+    if jc and is_fire_release(jc):
+        return True, "fire_release on counterpart"
+    if jc and is_basin_lock(jc):
+        return True, "basin_lock on counterpart"
+    return False, ""
+
+
+def _prompt_for_director_event(
+    *,
+    turn_number: int,
+    state_p: JudgeState,
+    state_c: JudgeState,
+    triggered_by: str,
+) -> str | None:
+    """Block stdin for director input. Empty line or EOF → None (skip)."""
+    print(f"\n{'='*60}")
+    print(f"[PEAK @ turn {turn_number}] {triggered_by}")
+    print(f"  protagonist: stage={state_p.stage}, mode={state_p.mode}, verdict={state_p.last_verdict}")
+    print(f"  counterpart: stage={state_c.stage}, mode={state_c.mode}, verdict={state_c.last_verdict}")
+    print(f"{'='*60}")
+    print("導演介入？輸入事件（空行=跳過）：")
+    try:
+        line = input().strip()
+    except EOFError:
+        return None
+    return line if line else None
 
 
 def _append_session_ledgers(
