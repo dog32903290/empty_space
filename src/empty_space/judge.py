@@ -386,6 +386,132 @@ def is_basin_lock(state: JudgeState) -> bool:
     return state.last_verdict == "basin_lock"
 
 
+# --- turn-0 initial state inference from scene premise ---
+
+_INFER_INITIAL_SYSTEM_PROMPT = """\
+你是戲劇裡的「隱性量測者」。現在場景還沒開演，你只拿到導演寫的場景前提和角色的 prelude。
+你的任務：判斷這個角色在戲**開始的第一秒**，會落在 stage × mode × verb 的哪一格。
+
+規則：
+- STAGE 序列：前置積累 → 初感訊號 → 半意識浮現 → 明確切換 → 穩定期 → 回溫期 → 基線
+  - 戲劇開場通常落在「前置積累」或「穩定期」（低強度起手）或「回溫期」（承接上一場的餘韻）
+  - 除非前提指明劇烈事件，否則不從「明確切換」或「半意識浮現」開始
+- MODE：收 / 放 / 在
+  - 這個角色**進場**時的身體傾向，從 persona 關係層的情緒動詞和反向記憶推導
+- VERB：用 persona 關係層的情緒動詞主軸，加上場景具體修飾
+  - 例：母親對兒子的主動詞是「承受」→ 這場戲她在「承受（靠近）」或「承受（等待）」或「承受（傾聽）」
+  - 每個角色的 base verb 不同，不要套同一個
+
+輸出格式（4 行，嚴格）：
+STAGE: <stage 名>
+MODE: <mode 名>
+VERB: <動詞>
+WHY: <一句為什麼這個組合>
+"""
+
+
+def _build_infer_prompt(
+    *,
+    speaker_role: str,
+    persona_name: str,
+    persona_core_text: str,
+    persona_relationship_text: str,
+    principles_text: str,
+    scene_premise: str,
+    prelude: str,
+    other_persona_name: str,
+) -> tuple[str, str]:
+    user = f"""\
+# 角色：{persona_name}（作為 {speaker_role}）
+# 對手：{other_persona_name}
+
+## 貫通軸
+{persona_core_text}
+
+## 關係層：對{other_persona_name}
+{persona_relationship_text}
+
+## 角色原則
+{principles_text}
+
+## 場景前提
+{scene_premise}
+
+## 這個角色的 prelude（導演給他的入場感）
+{prelude or "（無 prelude）"}
+
+# 任務
+這個角色**剛踏進這場戲**的第一秒，stage / mode / verb 在哪裡？
+"""
+    return _INFER_INITIAL_SYSTEM_PROMPT, user
+
+
+def _parse_infer_output(text: str) -> tuple[str, str, str, str]:
+    """Parse 4-line inference output (STAGE/MODE/VERB/WHY). Returns tuple;
+    fields default to empty if missing (caller provides fallback)."""
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    stage = _extract_field(lines, ["STAGE:", "STAGE：", "階段:", "階段："]) or ""
+    mode = _extract_field(lines, ["MODE:", "MODE：", "模式:", "模式："]) or ""
+    verb = _extract_field(lines, ["VERB:", "VERB：", "動詞:", "動詞："]) or ""
+    why = _extract_field(lines, ["WHY:", "WHY：", "為什麼:", "為什麼："]) or ""
+    return stage, mode, verb, why
+
+
+def infer_initial_state(
+    *,
+    speaker_role: str,
+    persona_name: str,
+    persona_core_text: str,
+    persona_relationship_text: str,
+    principles_text: str,
+    scene_premise: str,
+    prelude: str,
+    other_persona_name: str,
+    fallback_stage: str,
+    fallback_mode: str,
+    fallback_verb: str,
+    llm_client,
+) -> JudgeState:
+    """Run a turn-0 Judge inference to place the character into stage×mode×verb
+    based on scene premise + prelude + persona.
+
+    On any failure (LLM error, parse failure), returns a JudgeState with the
+    fallback values — so session can still start.
+    """
+    system, user = _build_infer_prompt(
+        speaker_role=speaker_role,
+        persona_name=persona_name,
+        persona_core_text=persona_core_text,
+        persona_relationship_text=persona_relationship_text,
+        principles_text=principles_text,
+        scene_premise=scene_premise,
+        prelude=prelude,
+        other_persona_name=other_persona_name,
+    )
+
+    try:
+        resp = llm_client.generate(system=system, user=user, model=JUDGE_MODEL)
+    except Exception:
+        return JudgeState(
+            speaker_role=speaker_role,  # type: ignore[arg-type]
+            stage=fallback_stage,
+            mode=fallback_mode,
+            current_verb=fallback_verb,
+        )
+
+    raw_stage, raw_mode, raw_verb, _why = _parse_infer_output(resp.content)
+    stage = _normalise_stage(raw_stage, fallback_stage)
+    mode = _normalise_mode(raw_mode, fallback_mode)
+    verb = raw_verb.strip() or fallback_verb
+
+    return JudgeState(
+        speaker_role=speaker_role,  # type: ignore[arg-type]
+        stage=stage,
+        mode=mode,
+        current_verb=verb,
+    )
+
+
 # --- YAML parsers for persona v3 files ---
 
 def parse_stage_mode_contexts(raw: dict | None) -> dict[str, dict[str, str]]:

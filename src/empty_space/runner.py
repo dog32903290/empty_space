@@ -31,6 +31,7 @@ from empty_space.retrieval import load_synonym_map, run_session_start_retrieval
 from empty_space.judge import (
     STAGE_ORDER,
     apply_stage_target,
+    infer_initial_state,
     is_basin_lock,
     is_fire_release,
     run_judge,
@@ -131,8 +132,12 @@ def run_session(
         retrieval_counterpart=retrieval_counterpart,
     )
 
-    state.judge_state_protagonist = _init_judge_state("protagonist", config.initial_state)
-    state.judge_state_counterpart = _init_judge_state("counterpart", config.initial_state)
+    state.judge_state_protagonist = _init_judge_state(
+        "protagonist", protagonist, counterpart.name, config, llm_client,
+    )
+    state.judge_state_counterpart = _init_judge_state(
+        "counterpart", counterpart, protagonist.name, config, llm_client,
+    )
 
     start_time = time.monotonic()
     events_triggered: list[tuple[int, str]] = []
@@ -378,23 +383,50 @@ def _run_composer_at_session_end(
 
 
 def _init_judge_state(
-    speaker_role: str, initial_state
+    speaker_role: str,
+    persona: Persona,
+    other_persona_name: str,
+    config: ExperimentConfig,
+    llm_client,
 ) -> JudgeState:
-    """Seed JudgeState from experiment's initial_state (InitialState).
+    """Seed JudgeState for one speaker.
 
-    initial_state.mode is already v3-migrated by the pydantic validator
-    (legacy '基線' → '在').
+    If persona has v3 config (judge_principles + stage_mode_contexts), runs
+    a turn-0 Judge inference over scene_premise + prelude + persona to place
+    the character into stage/mode/verb.
+
+    If v3 config is missing OR inference fails, falls back to
+    config.initial_state (legacy path).
     """
-    return JudgeState(
+    initial_state = config.initial_state
+    fallback = JudgeState(
         speaker_role=speaker_role,  # type: ignore[arg-type]
         stage=initial_state.stage,
         mode=initial_state.mode,
         current_verb=initial_state.verb,
-        last_why="",
-        last_verdict="",
-        move_history=[],
-        verdict_history=[],
-        hits_history=[],
+    )
+
+    if not _should_run_judge(persona):
+        return fallback
+
+    prelude = (
+        config.protagonist_prelude if speaker_role == "protagonist"
+        else config.counterpart_prelude
+    )
+    relationship_text = persona.relationship_texts.get(other_persona_name, "")
+    return infer_initial_state(
+        speaker_role=speaker_role,
+        persona_name=persona.name,
+        persona_core_text=persona.core_text,
+        persona_relationship_text=relationship_text,
+        principles_text=persona.judge_principles_text,
+        scene_premise=config.scene_premise or "",
+        prelude=prelude or "",
+        other_persona_name=other_persona_name,
+        fallback_stage=initial_state.stage,
+        fallback_mode=initial_state.mode,
+        fallback_verb=initial_state.verb,
+        llm_client=llm_client,
     )
 
 
