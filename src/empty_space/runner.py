@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Protocol
 
 from empty_space import ledger
+from empty_space.composer import run_composer
 from empty_space.loaders import load_persona, load_setting
 from empty_space.llm import GeminiResponse
 from empty_space.parser import parse_response
@@ -28,6 +29,7 @@ from empty_space.paths import RUNS_DIR
 from empty_space.prompt_assembler import build_system_prompt, build_user_message
 from empty_space.retrieval import load_synonym_map, run_session_start_retrieval
 from empty_space.schemas import (
+    ComposerSessionResult,
     ExperimentConfig,
     Persona,
     RetrievalResult,
@@ -190,13 +192,29 @@ def run_session(
 
     # Level 2: Session-end ledger append
     source_run = f"{config.exp_id}/{timestamp}"
-    ledger_appends = _append_session_ledgers(
+    ledger_appends, new_raw_ids = _append_session_ledgers(
         relationship=relationship,
         protagonist_persona=protagonist,
         counterpart_persona=counterpart,
         turns=state.turns,
         source_run=source_run,
     )
+
+    # Level 3: Composer Pro bake at session end
+    composer_result = _run_composer_at_session_end(
+        relationship=relationship,
+        protagonist=protagonist,
+        counterpart=counterpart,
+        out_dir=out_dir,
+        turns=state.turns,
+        new_raw_ids=new_raw_ids,
+        source_run=source_run,
+        llm_client=llm_client,
+    )
+
+    # Update models_used to include Pro if Composer ran
+    if composer_result.tokens_in > 0:
+        models_used = sorted(set(models_used) | {"gemini-2.5-pro"})
 
     write_meta(
         out_dir=out_dir,
@@ -217,6 +235,13 @@ def run_session(
             retrieval_protagonist.flash_tokens_out + retrieval_counterpart.flash_tokens_out
         ),
         ledger_appends=ledger_appends,
+        # Level 3 new:
+        composer_tokens_in=composer_result.tokens_in,
+        composer_tokens_out=composer_result.tokens_out,
+        composer_latency_ms=composer_result.latency_ms,
+        protagonist_refined_added=composer_result.protagonist_refined_added,
+        counterpart_refined_added=composer_result.counterpart_refined_added,
+        composer_parse_error=composer_result.parse_error,
     )
 
     return SessionResult(
@@ -236,6 +261,42 @@ def _compose_query(scene_premise: str | None, prelude: str | None) -> str:
     return "\n\n".join(p.strip() for p in parts if p and p.strip())
 
 
+def _run_composer_at_session_end(
+    *,
+    relationship: str,
+    protagonist: Persona,
+    counterpart: Persona,
+    out_dir: Path,
+    turns: list[Turn],
+    new_raw_ids: dict[str, list[str]],
+    source_run: str,
+    llm_client,
+) -> ComposerSessionResult:
+    """Wrap run_composer — exception-safe. On any error, returns result
+    with parse_error set, refined ledgers untouched.
+
+    run_composer itself already catches exceptions; this wrapper is
+    double protection for anything that somehow escapes.
+    """
+    try:
+        return run_composer(
+            relationship=relationship,
+            protagonist_name=protagonist.name,
+            counterpart_name=counterpart.name,
+            out_dir=out_dir,
+            session_turns=turns,
+            new_raw_ids=new_raw_ids,
+            source_run=source_run,
+            llm_client=llm_client,
+        )
+    except Exception as e:
+        return ComposerSessionResult(
+            tokens_in=0, tokens_out=0, latency_ms=0,
+            protagonist_refined_added=0, counterpart_refined_added=0,
+            parse_error=f"composer exception: {type(e).__name__}: {e}",
+        )
+
+
 def _append_session_ledgers(
     *,
     relationship: str,
@@ -243,11 +304,13 @@ def _append_session_ledgers(
     counterpart_persona: Persona,
     turns: list[Turn],
     source_run: str,
-) -> list[dict]:
-    """Bucket turns' candidates by speaker, append each bucket to its ledger.
+) -> tuple[list[dict], dict[str, list[str]]]:
+    """Append session candidates to raw ledgers.
 
-    Returns a list of dicts describing each append, for meta.yaml.
-    Empty buckets are skipped (no ledger file created for that side).
+    Returns (meta_appends, new_raw_ids) where new_raw_ids is
+    {"protagonist": ["imp_045", ...], "counterpart": ["imp_012", ...]}
+    for Composer provenance tracking.
+    Empty buckets skipped (no ledger file created for that side).
     """
     p_candidates = [
         (t.turn_number, imp) for t in turns
@@ -261,15 +324,17 @@ def _append_session_ledgers(
     ]
 
     appends: list[dict] = []
+    new_ids: dict[str, list[str]] = {"protagonist": [], "counterpart": []}
 
     if p_candidates:
-        ledger.append_session_candidates(
+        p_new_ids = ledger.append_session_candidates(
             relationship=relationship,
             speaker_role="protagonist",
             persona_name=protagonist_persona.name,
             candidates=p_candidates,
             source_run=source_run,
         )
+        new_ids["protagonist"] = p_new_ids
         new_ledger = ledger.read_ledger(
             relationship=relationship, persona_name=protagonist_persona.name,
         )
@@ -282,13 +347,14 @@ def _append_session_ledgers(
         })
 
     if c_candidates:
-        ledger.append_session_candidates(
+        c_new_ids = ledger.append_session_candidates(
             relationship=relationship,
             speaker_role="counterpart",
             persona_name=counterpart_persona.name,
             candidates=c_candidates,
             source_run=source_run,
         )
+        new_ids["counterpart"] = c_new_ids
         new_ledger = ledger.read_ledger(
             relationship=relationship, persona_name=counterpart_persona.name,
         )
@@ -300,4 +366,4 @@ def _append_session_ledgers(
             "new_ledger_version": new_ledger.ledger_version,
         })
 
-    return appends
+    return appends, new_ids
