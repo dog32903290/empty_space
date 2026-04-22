@@ -299,3 +299,105 @@ HITS: -
     last = _state(stage="半意識浮現", mode="在")
     r = parse_judge_output(text, last_state=last)
     assert r.proposed_stage == "半意識浮現"   # fallback
+
+
+from empty_space.judge import (
+    build_judge_prompt,
+    is_basin_lock,
+    is_fire_release,
+    run_judge,
+)
+from empty_space.llm import GeminiResponse
+
+
+class _MockLLM:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+        self.explode = False
+
+    def generate(self, *, system, user, model="gemini-2.5-flash"):
+        self.calls.append({"system": system, "user": user, "model": model})
+        if self.explode:
+            raise RuntimeError("network down")
+        content = self.responses.pop(0)
+        return GeminiResponse(
+            content=content, raw=None,
+            tokens_in=100, tokens_out=30, model=model, latency_ms=80,
+        )
+
+
+def test_build_judge_prompt_includes_last_state_and_persona():
+    last = _state(stage="前置積累", mode="在")
+    last.last_why = "上一句只說嗯"
+    system, user = build_judge_prompt(
+        last_state=last,
+        principles_text="鯨的下潛——肩內收",
+        stage_mode_contexts_text="前置積累_在：巡游",
+        recent_turns_text="[Turn 1 母親] 嗯。",
+        speaker_role="protagonist",
+        persona_name="母親",
+    )
+    assert "STAGE:" in system
+    assert "VERDICT:" in system
+    assert "鯨的下潛" in user
+    assert "巡游" in user
+    assert "前置積累" in user
+    assert "上一句只說嗯" in user
+    assert "[Turn 1 母親] 嗯。" in user
+    assert "母親" in user
+
+
+def test_run_judge_happy_path():
+    mock = _MockLLM(responses=[
+        "STAGE: 初感訊號\nMODE: 收\nWHY: ok\nVERDICT: N/A\nHITS: -\n",
+    ])
+    last = _state(stage="前置積累", mode="在")
+    result = run_judge(
+        last_state=last,
+        principles_text="p",
+        stage_mode_contexts_text="c",
+        recent_turns_text="t",
+        speaker_role="protagonist",
+        persona_name="母親",
+        llm_client=mock,
+    )
+    assert result.proposed_stage == "初感訊號"
+    assert result.proposed_mode == "收"
+    assert result.meta["parse_status"] == "ok"
+    assert result.meta["model"] == "gemini-2.5-flash"
+    assert result.meta["tokens_in"] == 100
+
+
+def test_run_judge_llm_exception_returns_fallback_result():
+    mock = _MockLLM(responses=[])
+    mock.explode = True
+    last = _state(stage="半意識浮現", mode="收")
+    result = run_judge(
+        last_state=last,
+        principles_text="p",
+        stage_mode_contexts_text="c",
+        recent_turns_text="t",
+        speaker_role="protagonist",
+        persona_name="母親",
+        llm_client=mock,
+    )
+    # Fallback: last state preserved, verdict N/A, error recorded
+    assert result.proposed_stage == "半意識浮現"
+    assert result.proposed_mode == "收"
+    assert result.proposed_verdict == "N/A"
+    assert "error" in result.meta
+    assert "network down" in result.meta["error"]
+
+
+def test_is_fire_release_and_basin_lock():
+    s = _state()
+    s.last_verdict = "fire_release"
+    assert is_fire_release(s) is True
+    assert is_basin_lock(s) is False
+    s.last_verdict = "basin_lock"
+    assert is_fire_release(s) is False
+    assert is_basin_lock(s) is True
+    s.last_verdict = "N/A"
+    assert is_fire_release(s) is False
+    assert is_basin_lock(s) is False
