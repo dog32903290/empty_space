@@ -99,21 +99,6 @@ def test_system_prompt_embeds_correct_relationship_text(
     assert mother_persona.relationship_texts["兒子"] in prompt
 
 
-def test_system_prompt_this_moment_block_formatting(
-    mother_persona, son_persona, hospital_setting, initial_state
-):
-    prompt = build_system_prompt(
-        persona=mother_persona,
-        counterpart_name=son_persona.name,
-        setting=hospital_setting,
-        scene_premise=None,
-        initial_state=initial_state,
-        active_events=[],
-    )
-    assert "動作詞：承受（靠近）" in prompt
-    assert "階段：前置積累" in prompt
-    assert "模式：基線" in prompt
-
 
 def test_system_prompt_scene_premise_sub_block_omitted_when_none(
     mother_persona, son_persona, hospital_setting, initial_state
@@ -403,3 +388,84 @@ def test_system_prompt_retrieved_impressions_rendered_as_bullet_list(
     )
     # Exact bullet format
     assert "你可能想起的：\n- 印象一\n- 印象二\n- 印象三" in prompt
+
+
+# --- Level 4: 此刻 block with JudgeState ---
+
+from empty_space.schemas import JudgeState
+
+
+def _mk_persona(name="母親") -> Persona:
+    return Persona(name=name, version="v3_tension", core_text="CORE")
+
+
+def _mk_setting() -> Setting:
+    return Setting(name="醫院", content="SETTING")
+
+
+def test_此刻_block_with_judge_state_and_contexts():
+    from empty_space.prompt_assembler import build_system_prompt
+
+    js = JudgeState(speaker_role="protagonist", stage="初感訊號", mode="收")
+    smc = {
+        "初感訊號_收": {
+            "身體傾向": "鯨偵測到聲波",
+            "語聲傾向": "沉默或單音節",
+            "注意力": "拉力在升",
+        }
+    }
+    prompt = build_system_prompt(
+        persona=_mk_persona(),
+        counterpart_name="兒子",
+        setting=_mk_setting(),
+        scene_premise="醫院",
+        initial_state=InitialState(verb="承受", stage="前置積累", mode="在"),
+        active_events=[],
+        judge_state=js,
+        stage_mode_contexts=smc,
+    )
+    assert "階段：初感訊號" in prompt
+    assert "模式：收" in prompt
+    assert "鯨偵測到聲波" in prompt
+    assert "沉默或單音節" in prompt
+    assert "拉力在升" in prompt
+
+
+def test_此刻_block_fallback_when_judge_state_none():
+    from empty_space.prompt_assembler import build_system_prompt
+
+    prompt = build_system_prompt(
+        persona=_mk_persona(),
+        counterpart_name="兒子",
+        setting=_mk_setting(),
+        scene_premise="醫院",
+        initial_state=InitialState(verb="承受", stage="前置積累", mode="在"),
+        active_events=[],
+        judge_state=None,
+        stage_mode_contexts=None,
+    )
+    # Fallback to initial_state (Level 3 behavior)
+    assert "動作詞：承受" in prompt
+    assert "階段：前置積累" in prompt
+    assert "模式：在" in prompt
+
+
+def test_此刻_block_fallback_when_cell_missing():
+    """Judge_state present but cell not in stage_mode_contexts — minimal render."""
+    from empty_space.prompt_assembler import build_system_prompt
+
+    js = JudgeState(speaker_role="protagonist", stage="穩定期", mode="放")
+    prompt = build_system_prompt(
+        persona=_mk_persona(),
+        counterpart_name="兒子",
+        setting=_mk_setting(),
+        scene_premise="醫院",
+        initial_state=InitialState(verb="承受", stage="前置積累", mode="在"),
+        active_events=[],
+        judge_state=js,
+        stage_mode_contexts={},   # empty — 穩定期_放 not present
+    )
+    assert "階段：穩定期" in prompt
+    assert "模式：放" in prompt
+    # No body/voice/attention sub-lines when cell missing
+    assert "身體傾向" not in prompt
