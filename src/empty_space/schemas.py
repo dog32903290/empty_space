@@ -10,17 +10,20 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 # --- Pydantic models: loaded from YAML ---
 
 class Persona(BaseModel):
-    """A character's identity: 貫通軸 + N 關係層."""
+    """A character's identity: 貫通軸 + N 關係層 + (optional) v3 judge context."""
     name: str
     version: str
     core_text: str
     relationship_texts: dict[str, str] = Field(default_factory=dict)
+    # Level 4 (optional — empty when persona lacks v3 files):
+    judge_principles_text: str = ""
+    stage_mode_contexts_parsed: dict[str, dict[str, str]] = Field(default_factory=dict)
 
 
 class Setting(BaseModel):
@@ -44,10 +47,18 @@ class SettingRef(BaseModel):
 
 
 class InitialState(BaseModel):
-    """Opening verb / stage / mode — feeds the initial Judge state."""
+    """Opening verb / stage / mode — feeds the initial Judge state.
+
+    v3 mode vocabulary: 收 / 放 / 在. Legacy '基線' auto-migrated to '在'.
+    """
     verb: str
     stage: str
     mode: str
+
+    @field_validator("mode")
+    @classmethod
+    def _migrate_legacy_mode(cls, v: str) -> str:
+        return "在" if v == "基線" else v
 
 
 class Termination(BaseModel):
@@ -153,10 +164,15 @@ class SessionResult:
     exp_id: str
     out_dir: Path
     total_turns: int
-    termination_reason: Literal["max_turns"]  # Phase 3 will extend
+    termination_reason: str  # "max_turns" | "dual_basin_lock"
     total_tokens_in: int
     total_tokens_out: int
     duration_seconds: float
+    # Level 4 additions:
+    judge_trajectories: dict = field(default_factory=dict)
+    director_injections: list[dict] = field(default_factory=list)
+    interactive_mode: bool = False
+    judge_health: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -223,6 +239,40 @@ class ComposerSessionResult:
     protagonist_refined_added: int
     counterpart_refined_added: int
     parse_error: str | None = None
+
+
+# --- Level 4: Judge state machine ---
+
+@dataclass
+class JudgeState:
+    """Per-speaker (stage, mode) state, updated after each turn by Judge.
+
+    move_history / verdict_history / hits_history accumulate per turn for
+    termination checks and post-session analysis.
+    """
+    speaker_role: Literal["protagonist", "counterpart"]
+    stage: str
+    mode: str
+    last_why: str = ""
+    last_verdict: str = ""
+    move_history: list[str] = field(default_factory=list)
+    verdict_history: list[str] = field(default_factory=list)
+    hits_history: list[list[str]] = field(default_factory=list)
+
+
+@dataclass
+class JudgeResult:
+    """One Judge LLM call outcome (proposed state + parse metadata).
+
+    `proposed_*` are what Judge suggested; the runner passes these through
+    `apply_stage_target` to produce the actual new JudgeState.
+    """
+    proposed_stage: str
+    proposed_mode: str
+    proposed_verdict: str  # "fire_release" | "basin_lock" | "N/A"
+    why: str
+    hits: list[str]
+    meta: dict  # tokens_in, tokens_out, latency_ms, model, parse_status, error?
 
 
 @dataclass
