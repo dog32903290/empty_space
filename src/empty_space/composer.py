@@ -116,6 +116,17 @@ def _parse_section(section) -> list[RefinedImpressionDraft]:
 _COMPOSER_SYSTEM_PROMPT = """\
 你是劇場記憶的 consolidator。
 
+## Raw 優先級
+部分 raws 帶有狀態標記：
+- 🔥fire_release：角色情緒釋放時刻。優先從這些 raws 取材精煉
+- 🪨basin_lock：盆地鎖住時刻。代表穩態下的核心印象，也值得優先
+- 高張力-半意識浮現 / 高張力-明確切換：情緒弧線高張力區
+- 無標記的 raws 屬於常態狀態，優先級次之
+
+精煉時不要只從無標記 raws 取材；至少 50% 的 refined 要有標記 raws 參與。
+
+---
+
 你剛看完一段對話（兩個角色的 session）。兩個角色在 turn 之中各自產出了
 自己的「候選印象」——雜亂、片段的感受記錄。你的工作是**從整段上下文**
 提取**敘事單位**：這段時間裡發生了什麼事件，角色的身體如何承接它。
@@ -229,6 +240,7 @@ def gather_composer_input(
     out_dir: Path,
     session_turns: list[Turn],
     new_raw_ids: dict[str, list[str]],
+    candidate_states: dict[str, list[dict]] | None = None,
 ) -> ComposerInput:
     """Gather all materials Composer needs from the session."""
     conversation_text = (out_dir / "conversation.md").read_text(encoding="utf-8")
@@ -258,6 +270,7 @@ def gather_composer_input(
             "protagonist": existing_p.impressions[-30:],
             "counterpart": existing_c.impressions[-30:],
         },
+        new_candidate_states=candidate_states or {},
     )
 
 
@@ -267,19 +280,21 @@ def build_composer_prompt(input: ComposerInput) -> tuple[str, str]:
 
     user_parts.append("## Session 對話\n" + input.conversation_text.rstrip())
 
-    # Raw candidates with ids
+    # Raw candidates with ids and state tags
     p_raws = input.new_candidates["protagonist"]
     p_ids = input.new_candidate_ids.get("protagonist", [])
+    p_states = input.new_candidate_states.get("protagonist", [])
     user_parts.append(
         f"## {input.protagonist_name}的 Raw Candidates（本 session 新產出）\n"
-        + _format_raw_list(p_raws, p_ids)
+        + _format_raw_list_with_states(p_raws, p_ids, p_states)
     )
 
     c_raws = input.new_candidates["counterpart"]
     c_ids = input.new_candidate_ids.get("counterpart", [])
+    c_states = input.new_candidate_states.get("counterpart", [])
     user_parts.append(
         f"## {input.counterpart_name}的 Raw Candidates（本 session 新產出）\n"
-        + _format_raw_list(c_raws, c_ids)
+        + _format_raw_list_with_states(c_raws, c_ids, c_states)
     )
 
     # Existing refined (context)
@@ -297,15 +312,43 @@ def build_composer_prompt(input: ComposerInput) -> tuple[str, str]:
     return _COMPOSER_SYSTEM_PROMPT, "\n\n".join(user_parts)
 
 
-def _format_raw_list(raws: list[CandidateImpression], ids: list[str]) -> str:
+def _format_raw_with_state(raw_id: str, imp: CandidateImpression, state: dict | None) -> str:
+    """Format one raw candidate line with optional state tag."""
+    state_tag = ""
+    if state:
+        verdict = state.get("verdict", "N/A")
+        stage = state.get("stage", "")
+        tag_parts = []
+        if verdict == "fire_release":
+            tag_parts.append("🔥fire_release")
+        elif verdict == "basin_lock":
+            tag_parts.append("🪨basin_lock")
+        if stage in ("半意識浮現", "明確切換"):
+            tag_parts.append(f"高張力-{stage}")
+        if tag_parts:
+            state_tag = f" [{'|'.join(tag_parts)}]"
+    symbols_str = ", ".join(imp.symbols) if imp.symbols else ""
+    return f"- {raw_id}{state_tag}: {imp.text} [symbols: {symbols_str}]"
+
+
+def _format_raw_list_with_states(
+    raws: list[CandidateImpression],
+    ids: list[str],
+    states: list[dict],
+) -> str:
     if not raws:
         return "（無）"
     lines = []
     for i, raw in enumerate(raws):
         raw_id = ids[i] if i < len(ids) else f"imp_?{i}"
-        symbols_str = ", ".join(raw.symbols) if raw.symbols else ""
-        lines.append(f"- {raw_id}: {raw.text} [symbols: {symbols_str}]")
+        state = states[i] if i < len(states) else None
+        lines.append(_format_raw_with_state(raw_id, raw, state))
     return "\n".join(lines)
+
+
+def _format_raw_list(raws: list[CandidateImpression], ids: list[str]) -> str:
+    """Legacy helper (no state tags). Kept for backward compatibility."""
+    return _format_raw_list_with_states(raws, ids, [])
 
 
 def _format_refined_list(refined) -> str:
@@ -348,6 +391,7 @@ def run_composer(
     source_run: str,
     llm_client,
     state_maps: dict[str, dict[str, dict]] | None = None,
+    candidate_states: dict[str, list[dict]] | None = None,
 ) -> ComposerSessionResult:
     """Top-level Composer orchestrator. Called by runner at session end.
 
@@ -359,6 +403,9 @@ def run_composer(
 
     state_maps: optional {"protagonist": {raw_id: state_dict}, "counterpart": {...}}
     When provided, enriches each refined draft with source_states metadata.
+
+    candidate_states: optional {"protagonist": [state_dict, ...], "counterpart": [...]}
+    When provided, Composer sees each raw's state tags (fire_release/basin_lock/high-stage).
     """
     state_maps = state_maps or {"protagonist": {}, "counterpart": {}}
     try:
@@ -370,6 +417,7 @@ def run_composer(
             out_dir=out_dir,
             session_turns=session_turns,
             new_raw_ids=new_raw_ids,
+            candidate_states=candidate_states,
         )
 
         # 2. Build prompt

@@ -291,3 +291,6 @@ class ComposerInput:
     new_candidates: dict[str, list[CandidateImpression]]     # speaker → list
     new_candidate_ids: dict[str, list[str]]                  # speaker → raw ids (same order)
     existing_refined: dict[str, list[RefinedImpression]]     # speaker → last 30
+    # NEW (Level 4.3): speaker → list of state dicts (same order as new_candidates[speaker])
+    # Each state dict: {"turn": int, "stage": str, "mode": str, "verb": str, "verdict": str}
+    new_candidate_states: dict[str, list[dict]] = field(default_factory=dict)

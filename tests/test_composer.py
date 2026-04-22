@@ -585,3 +585,137 @@ def test_run_composer_enriches_drafts_with_source_states(tmp_path, monkeypatch):
     ss = imp.source_states[0]
     assert ss["stage"] == "初感訊號"
     assert ss["turn"] == 1
+
+
+# --- Level 4.3: Composer salience weighting ---
+
+from empty_space.composer import _format_raw_with_state
+
+
+def test_composer_input_includes_candidate_states():
+    """ComposerInput carries new_candidate_states per speaker, parallel to new_candidates."""
+    states = {
+        "protagonist": [
+            {"turn": 1, "stage": "明確切換", "mode": "放", "verb": "釋放", "verdict": "fire_release"},
+        ],
+        "counterpart": [],
+    }
+    inp = ComposerInput(
+        relationship="R",
+        protagonist_name="母親",
+        counterpart_name="兒子",
+        conversation_text="",
+        new_candidates={"protagonist": [CandidateImpression(text="x", symbols=["a"])], "counterpart": []},
+        new_candidate_ids={"protagonist": ["imp_001"], "counterpart": []},
+        existing_refined={"protagonist": [], "counterpart": []},
+        new_candidate_states=states,
+    )
+    assert inp.new_candidate_states["protagonist"][0]["verdict"] == "fire_release"
+    assert inp.new_candidate_states["counterpart"] == []
+
+
+def test_build_composer_prompt_tags_fire_release_raws():
+    """Prompt contains 🔥fire_release tag for the raw with that verdict."""
+    states = {
+        "protagonist": [
+            {"turn": 1, "stage": "明確切換", "mode": "放", "verb": "釋放", "verdict": "fire_release"},
+        ],
+        "counterpart": [],
+    }
+    inp = ComposerInput(
+        relationship="R",
+        protagonist_name="母親",
+        counterpart_name="兒子",
+        conversation_text="session dialogue",
+        new_candidates={
+            "protagonist": [CandidateImpression(text="她爆發了", symbols=["爆發"])],
+            "counterpart": [],
+        },
+        new_candidate_ids={"protagonist": ["imp_007"], "counterpart": []},
+        existing_refined={"protagonist": [], "counterpart": []},
+        new_candidate_states=states,
+    )
+    system, user = build_composer_prompt(inp)
+    assert "🔥fire_release" in user
+    assert "imp_007" in user
+
+
+def test_build_composer_prompt_omits_tag_for_neutral_raws():
+    """Prompt does NOT add any state tag for raws with N/A verdict and normal stage."""
+    states = {
+        "protagonist": [
+            {"turn": 1, "stage": "前置積累", "mode": "在", "verb": "承受", "verdict": "N/A"},
+        ],
+        "counterpart": [],
+    }
+    inp = ComposerInput(
+        relationship="R",
+        protagonist_name="母親",
+        counterpart_name="兒子",
+        conversation_text="session dialogue",
+        new_candidates={
+            "protagonist": [CandidateImpression(text="普通時刻", symbols=["沉默"])],
+            "counterpart": [],
+        },
+        new_candidate_ids={"protagonist": ["imp_003"], "counterpart": []},
+        existing_refined={"protagonist": [], "counterpart": []},
+        new_candidate_states=states,
+    )
+    system, user = build_composer_prompt(inp)
+    # imp_003 is present but without any state tag bracket
+    assert "imp_003" in user
+    assert "🔥" not in user
+    assert "🪨" not in user
+    assert "高張力" not in user
+
+
+def test_build_composer_prompt_tags_basin_lock_raws():
+    """Prompt contains 🪨basin_lock tag for raws with that verdict."""
+    states = {
+        "protagonist": [],
+        "counterpart": [
+            {"turn": 2, "stage": "穩定期", "mode": "在", "verb": "沉默", "verdict": "basin_lock"},
+        ],
+    }
+    inp = ComposerInput(
+        relationship="R",
+        protagonist_name="母親",
+        counterpart_name="兒子",
+        conversation_text="",
+        new_candidates={
+            "protagonist": [],
+            "counterpart": [CandidateImpression(text="盆地時刻", symbols=["靜"])],
+        },
+        new_candidate_ids={"protagonist": [], "counterpart": ["imp_010"]},
+        existing_refined={"protagonist": [], "counterpart": []},
+        new_candidate_states=states,
+    )
+    system, user = build_composer_prompt(inp)
+    assert "🪨basin_lock" in user
+    assert "imp_010" in user
+
+
+def test_build_composer_prompt_tags_high_tension_stage():
+    """Prompt contains 高張力-半意識浮現 tag for raws in that stage."""
+    states = {
+        "protagonist": [
+            {"turn": 1, "stage": "半意識浮現", "mode": "收", "verb": "承受", "verdict": "N/A"},
+        ],
+        "counterpart": [],
+    }
+    inp = ComposerInput(
+        relationship="R",
+        protagonist_name="母親",
+        counterpart_name="兒子",
+        conversation_text="",
+        new_candidates={
+            "protagonist": [CandidateImpression(text="浮現時刻", symbols=["浮現"])],
+            "counterpart": [],
+        },
+        new_candidate_ids={"protagonist": ["imp_005"], "counterpart": []},
+        existing_refined={"protagonist": [], "counterpart": []},
+        new_candidate_states=states,
+    )
+    system, user = build_composer_prompt(inp)
+    assert "高張力-半意識浮現" in user
+    assert "imp_005" in user

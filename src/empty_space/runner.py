@@ -22,6 +22,7 @@ from typing import Protocol
 
 from empty_space import ledger
 from empty_space.composer import run_composer
+from empty_space.ledger import read_refined_ledger
 from empty_space.loaders import load_persona, load_setting
 from empty_space.llm import GeminiResponse
 from empty_space.parser import parse_response
@@ -276,7 +277,7 @@ def run_session(
 
     # Level 2: Session-end ledger append
     source_run = f"{config.exp_id}/{timestamp}"
-    ledger_appends, new_raw_ids, state_maps = _append_session_ledgers(
+    ledger_appends, new_raw_ids, state_maps, candidate_states = _append_session_ledgers(
         relationship=relationship,
         protagonist_persona=protagonist,
         counterpart_persona=counterpart,
@@ -296,6 +297,7 @@ def run_session(
         source_run=source_run,
         llm_client=llm_client,
         state_maps=state_maps,
+        candidate_states=candidate_states,
     )
 
     # Update models_used to include Pro if Composer ran
@@ -364,6 +366,7 @@ def _run_composer_at_session_end(
     source_run: str,
     llm_client,
     state_maps: dict[str, dict[str, dict]] | None = None,
+    candidate_states: dict[str, list[dict]] | None = None,
 ) -> ComposerSessionResult:
     """Wrap run_composer — exception-safe. On any error, returns result
     with parse_error set, refined ledgers untouched.
@@ -382,6 +385,7 @@ def _run_composer_at_session_end(
             source_run=source_run,
             llm_client=llm_client,
             state_maps=state_maps,
+            candidate_states=candidate_states,
         )
     except Exception as e:
         return ComposerSessionResult(
@@ -468,6 +472,29 @@ def _format_recent_turns(turns: list[Turn], n: int = 3) -> str:
     )
 
 
+def _build_refined_excerpt(persona: Persona, relationship: str) -> str:
+    """Return top-3 most recent refined impressions as formatted text.
+
+    Reads speaker's refined ledger; impressions are chronologically appended,
+    so we take the last 3. Returns "" if no refined ledger exists yet.
+    """
+    try:
+        ledger_obj = read_refined_ledger(
+            relationship=relationship,
+            persona_name=persona.name,
+        )
+    except Exception:
+        return ""
+    if not ledger_obj.impressions:
+        return ""
+    recent = ledger_obj.impressions[-3:]
+    lines = []
+    for imp in reversed(recent):  # most recent first
+        symbols_str = ", ".join(imp.symbols) if imp.symbols else ""
+        lines.append(f"- {imp.id}: {imp.text} [symbols: {symbols_str}]")
+    return "\n".join(lines)
+
+
 def _run_judges_post_turn(
     state: "SessionState",
     llm_client,
@@ -480,6 +507,7 @@ def _run_judges_post_turn(
       state.judge_health_events.{protagonist,counterpart}  (parse_status tag per call)
     """
     recent = _format_recent_turns(state.turns, n=3)
+    relationship = f"{state.protagonist.name}_x_{state.counterpart.name}"
     outputs: dict[str, dict] = {}
 
     for role, persona, attr, hist_attr in (
@@ -495,6 +523,7 @@ def _run_judges_post_turn(
             getattr(state, hist_attr)["verbs"].append(last.current_verb)
             state.judge_health_events[role].append({"parse_status": "no_judge"})
             continue
+        refined_excerpt = _build_refined_excerpt(persona, relationship)
         jr = run_judge(
             last_state=last,
             principles_text=persona.judge_principles_text,
@@ -503,6 +532,7 @@ def _run_judges_post_turn(
             speaker_role=role,
             persona_name=persona.name,
             llm_client=llm_client,
+            refined_excerpt=refined_excerpt,
         )
         new_state, move = apply_stage_target(
             last_state=last,
@@ -698,12 +728,14 @@ def _append_session_ledgers(
     turns: list[Turn],
     source_run: str,
     state: "SessionState",
-) -> tuple[list[dict], dict[str, list[str]], dict[str, dict[str, dict]]]:
+) -> tuple[list[dict], dict[str, list[str]], dict[str, dict[str, dict]], dict[str, list[dict]]]:
     """Append session candidates to raw ledgers.
 
-    Returns (meta_appends, new_raw_ids, state_maps) where:
+    Returns (meta_appends, new_raw_ids, state_maps, candidate_states) where:
     - new_raw_ids: {"protagonist": ["imp_045", ...], "counterpart": ["imp_012", ...]}
     - state_maps: {"protagonist": {raw_id: state_dict}, "counterpart": {...}}
+    - candidate_states: {"protagonist": [state_dict, ...], "counterpart": [...]}
+      (parallel list to new_raw_ids, used by Composer for salience weighting)
 
     state_maps enables Composer to attach source_states to refined drafts.
     Empty buckets skipped (no ledger file created for that side).
@@ -776,4 +808,11 @@ def _append_session_ledgers(
         "counterpart": _build_state_map_for_speaker(state, "counterpart", c_raw_id_to_turn),
     }
 
-    return appends, new_ids, state_maps
+    # Build candidate_states: parallel list to new_raw_ids[role]
+    candidate_states: dict[str, list[dict]] = {"protagonist": [], "counterpart": []}
+    for role in ("protagonist", "counterpart"):
+        for raw_id in new_ids[role]:
+            state_dict = state_maps[role].get(raw_id, {})
+            candidate_states[role].append(state_dict)
+
+    return appends, new_ids, state_maps, candidate_states

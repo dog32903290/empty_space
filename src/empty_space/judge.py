@@ -299,13 +299,21 @@ def build_judge_prompt(
     recent_turns_text: str,
     speaker_role: str,
     persona_name: str,
+    refined_excerpt: str = "",
 ) -> tuple[str, str]:
     """Return (system_prompt, user_prompt) for one Judge call."""
+    refined_section = ""
+    if refined_excerpt:
+        refined_section = f"""\
+## 角色的過去印象（refined ledger top-3 最近）
+{refined_excerpt}
+
+"""
     user = f"""\
 # 角色原則
 {principles_text}
 
-# Stage × Mode 脈絡
+{refined_section}# Stage × Mode 脈絡
 {stage_mode_contexts_text}
 
 # 上一輪狀態
@@ -333,6 +341,7 @@ def run_judge(
     speaker_role: str,
     persona_name: str,
     llm_client,
+    refined_excerpt: str = "",
 ) -> JudgeResult:
     """One full Judge call. Returns JudgeResult; never raises.
 
@@ -347,6 +356,7 @@ def run_judge(
         recent_turns_text=recent_turns_text,
         speaker_role=speaker_role,
         persona_name=persona_name,
+        refined_excerpt=refined_excerpt,
     )
     try:
         resp = llm_client.generate(system=system, user=user, model=JUDGE_MODEL)

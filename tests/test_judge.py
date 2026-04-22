@@ -401,3 +401,39 @@ def test_is_fire_release_and_basin_lock():
     s.last_verdict = "N/A"
     assert is_fire_release(s) is False
     assert is_basin_lock(s) is False
+
+
+# --- Level 4.4: Judge reads refined ledger ---
+
+def test_build_judge_prompt_includes_refined_excerpt_when_provided():
+    """When refined_excerpt is non-empty, user prompt contains the section header and text."""
+    last = _state(stage="前置積累", mode="在")
+    excerpt = "- ref_012: 十幾年後在醫院走廊見到他，視線只敢落在他身上一瞬。 [symbols: 十幾年, 醫院, 走廊]"
+    system, user = build_judge_prompt(
+        last_state=last,
+        principles_text="p",
+        stage_mode_contexts_text="c",
+        recent_turns_text="t",
+        speaker_role="protagonist",
+        persona_name="母親",
+        refined_excerpt=excerpt,
+    )
+    assert "角色的過去印象" in user
+    assert "ref_012" in user
+    assert "十幾年後在醫院走廊" in user
+
+
+def test_build_judge_prompt_omits_section_when_excerpt_empty():
+    """When refined_excerpt is empty string, the section is absent from user prompt."""
+    last = _state(stage="前置積累", mode="在")
+    system, user = build_judge_prompt(
+        last_state=last,
+        principles_text="p",
+        stage_mode_contexts_text="c",
+        recent_turns_text="t",
+        speaker_role="protagonist",
+        persona_name="母親",
+        refined_excerpt="",
+    )
+    assert "角色的過去印象" not in user
+    assert "refined ledger" not in user

@@ -555,3 +555,68 @@ def test_session_start_retrieval_receives_inferred_state(redirect_all_dirs):
     # → ref_001 should rank first due to state-resonance bonus
     assert len(p_impressions) >= 1
     assert p_impressions[0]["text"] == "初感訊號時的記憶"
+
+
+# --- Level 4.4: Judge reads refined ledger ---
+
+def test_judge_receives_refined_excerpt_from_prior_session(redirect_all_dirs):
+    """Session 2 Judge prompt (turn 1) includes refined impressions written in Session 1.
+
+    Mechanism: _build_refined_excerpt reads protagonist's refined ledger before
+    each Judge call. After Session 1 appends refined, Session 2 Judge sees them.
+    """
+    from empty_space.ledger import append_refined_impressions
+    from empty_space.schemas import RefinedImpressionDraft
+
+    # Pre-seed protagonist's refined ledger (simulates Session 1 outcome)
+    append_refined_impressions(
+        relationship="母親_x_兒子",
+        speaker_role="protagonist",
+        persona_name="母親",
+        drafts=[
+            RefinedImpressionDraft(
+                text="十幾年後在醫院走廊見到他，視線只敢落在他身上一瞬。",
+                symbols=["十幾年", "醫院", "走廊", "兒子"],
+                source_raw_ids=["imp_001"],
+            ),
+        ],
+        source_run="session1/t",
+    )
+
+    # Session 2: 1-turn session so we can inspect turn 1 Judge calls
+    responses = [
+        # 0,1: infer_p, infer_c
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
+        # 2,3: extract_p, extract_c
+        "- 醫院\n",
+        "- 醫院\n",
+        # 4: turn 1 dialogue
+        "話一",
+        # 5,6: judge_p (protagonist), judge_c (counterpart)
+        "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        # 7: composer
+        "母親: []\n兒子: []\n",
+    ]
+
+    config = _base_config(max_turns=1)
+    client = MockLLMClient(responses)
+    run_session(config=config, llm_client=client)
+
+    # Find protagonist's Judge call (隱性量測者 system, not infer)
+    judge_calls = [
+        c for c in client.calls
+        if "隱性量測者" in c["system"] and "現在場景還沒開演" not in c["system"]
+    ]
+    # Should be 2 judge calls (protagonist + counterpart) for 1 turn
+    assert len(judge_calls) == 2
+
+    # Protagonist judge call user prompt should contain the refined text
+    protagonist_judge_user = judge_calls[0]["user"]
+    assert "角色的過去印象" in protagonist_judge_user
+    assert "十幾年後在醫院走廊見到他" in protagonist_judge_user
+
+    # Counterpart judge call should NOT contain protagonist's refined (no counterpart refined)
+    counterpart_judge_user = judge_calls[1]["user"]
+    assert "十幾年後在醫院走廊見到他" not in counterpart_judge_user
