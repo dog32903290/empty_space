@@ -224,8 +224,15 @@ def run_session(
             judge_output_counterpart=judge_out_c,
         )
 
+        # Level 4: termination check
+        should_stop, reason = _should_terminate(state)
+        if should_stop:
+            termination_reason = reason
+            break
+    else:
+        termination_reason = "max_turns"
+
     duration = time.monotonic() - start_time
-    termination_reason = "max_turns"
 
     total_tokens_in = sum(t.tokens_in for t in state.turns)
     total_tokens_out = sum(t.tokens_out for t in state.turns)
@@ -500,6 +507,28 @@ def _build_judge_health(state: "SessionState") -> dict:
         "protagonist": pack(state.judge_health_events["protagonist"]),
         "counterpart": pack(state.judge_health_events["counterpart"]),
     }
+
+
+def _should_terminate(state: "SessionState", consecutive_required: int = 2) -> tuple[bool, str]:
+    """Check whether session should stop after the current turn.
+
+    Returns (should_stop, reason). Reason is "dual_basin_lock" or "" (no stop).
+    Requires BOTH speakers' verdict_history to end with `consecutive_required`
+    basin_lock verdicts. Single-speaker basin_lock does not terminate.
+    """
+    jp, jc = state.judge_state_protagonist, state.judge_state_counterpart
+    if jp is None or jc is None:
+        return False, ""
+
+    def last_n_all_basin(s: JudgeState, n: int) -> bool:
+        h = s.verdict_history
+        if len(h) < n:
+            return False
+        return all(v == "basin_lock" for v in h[-n:])
+
+    if last_n_all_basin(jp, consecutive_required) and last_n_all_basin(jc, consecutive_required):
+        return True, "dual_basin_lock"
+    return False, ""
 
 
 def _append_session_ledgers(

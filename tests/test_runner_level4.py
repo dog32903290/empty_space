@@ -219,3 +219,44 @@ def test_meta_yaml_includes_judge_trajectories_and_health():
     assert meta["termination"]["reason"] == "max_turns"
     assert meta["termination"]["turn"] == 2
     assert meta["interactive_mode"] is False
+
+
+def test_dual_basin_lock_terminates_session_early():
+    """Both speakers verdict=basin_lock for 2 consecutive turns → session stops."""
+    # max_turns=10 but both speakers basin_lock from turn 1 → should stop at turn 2 (need 2 consecutive)
+    responses = [
+        "- 醫院\n", "- 醫院\n",
+        "話1",
+        "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
+        "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
+        "話2",
+        "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
+        "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=10)
+    client = MockLLMClient(responses)
+    result = run_session(config=config, llm_client=client)
+
+    assert result.total_turns == 2
+    assert result.termination_reason == "dual_basin_lock"
+
+
+def test_single_basin_lock_does_not_terminate():
+    """Only protagonist basin_lock — session continues until max_turns."""
+    # max_turns=2 to keep small; counterpart always N/A
+    responses = [
+        "- 醫院\n", "- 醫院\n",
+        "話1",
+        "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "話2",
+        "STAGE: 穩定期\nMODE: 在\nWHY: x\nVERDICT: basin_lock\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=2)
+    client = MockLLMClient(responses)
+    result = run_session(config=config, llm_client=client)
+    assert result.total_turns == 2
+    assert result.termination_reason == "max_turns"
