@@ -14,6 +14,7 @@ import yaml
 
 from empty_space.paths import PERSONA_ROOT, EXPERIMENTS_DIR
 from empty_space.schemas import Persona, Setting, ExperimentConfig
+from empty_space.judge import parse_judge_principles, parse_stage_mode_contexts
 
 
 def _resolve_under(root: Path, rel_path: str) -> Path:
@@ -67,11 +68,27 @@ def load_persona(rel_path: str, version: str) -> Persona:
             counterpart = match.group("counterpart")
             relationship_texts[counterpart] = rel_file.read_text(encoding="utf-8")
 
+    # Level 4: optional v3 judge files
+    judge_principles_text = ""
+    jp_file = persona_dir / "judge_principles_v3.yaml"
+    if jp_file.exists():
+        judge_principles_text = parse_judge_principles(
+            jp_file.read_text(encoding="utf-8")
+        )
+
+    stage_mode_contexts_parsed: dict[str, dict[str, str]] = {}
+    smc_file = persona_dir / "stage_mode_contexts_v3.yaml"
+    if smc_file.exists():
+        raw = yaml.safe_load(smc_file.read_text(encoding="utf-8")) or {}
+        stage_mode_contexts_parsed = parse_stage_mode_contexts(raw)
+
     return Persona(
         name=persona_dir.name,
         version=version,
         core_text=core_text,
         relationship_texts=relationship_texts,
+        judge_principles_text=judge_principles_text,
+        stage_mode_contexts_parsed=stage_mode_contexts_parsed,
     )
 
 
