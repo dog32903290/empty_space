@@ -68,6 +68,16 @@ class SessionState:
     judge_state_protagonist: JudgeState | None = None
     judge_state_counterpart: JudgeState | None = None
     director_injections: list[dict] = field(default_factory=list)
+    # Bookkeeping for meta.yaml aggregation:
+    judge_history_protagonist: dict = field(
+        default_factory=lambda: {"stages": [], "modes": []}
+    )
+    judge_history_counterpart: dict = field(
+        default_factory=lambda: {"stages": [], "modes": []}
+    )
+    judge_health_events: dict = field(
+        default_factory=lambda: {"protagonist": [], "counterpart": []}
+    )
 
 
 def run_session(
@@ -275,6 +285,12 @@ def run_session(
         protagonist_refined_added=composer_result.protagonist_refined_added,
         counterpart_refined_added=composer_result.counterpart_refined_added,
         composer_parse_error=composer_result.parse_error,
+        # Level 4:
+        judge_trajectories=_build_judge_trajectories(state),
+        judge_health=_build_judge_health(state),
+        termination_turn=len(state.turns),
+        director_injections=list(state.director_injections),
+        interactive_mode=False,   # Task 13 will override via run_session's interactive kwarg
     )
 
     return SessionResult(
@@ -383,22 +399,27 @@ def _run_judges_post_turn(
     state: "SessionState",
     llm_client,
 ) -> tuple[dict, dict]:
-    """Run Judge for both speakers (if eligible). Returns (p_output_dict, c_output_dict)
-    suitable for writing to turn yaml's judge_output_protagonist / _counterpart.
+    """Run Judge for both speakers (if eligible). Returns (p_output_dict, c_output_dict).
 
-    Updates state.judge_state_protagonist and state.judge_state_counterpart
-    in place via apply_stage_target.
+    Updates state.judge_state_protagonist and state.judge_state_counterpart via
+    apply_stage_target. Also appends to bookkeeping fields:
+      state.judge_history_{protagonist,counterpart}.{stages,modes}
+      state.judge_health_events.{protagonist,counterpart}  (parse_status tag per call)
     """
     recent = _format_recent_turns(state.turns, n=3)
     outputs: dict[str, dict] = {}
 
-    for role, persona, attr in (
-        ("protagonist", state.protagonist, "judge_state_protagonist"),
-        ("counterpart", state.counterpart, "judge_state_counterpart"),
+    for role, persona, attr, hist_attr in (
+        ("protagonist", state.protagonist, "judge_state_protagonist", "judge_history_protagonist"),
+        ("counterpart", state.counterpart, "judge_state_counterpart", "judge_history_counterpart"),
     ):
         last = getattr(state, attr)
         if not _should_run_judge(persona):
             outputs[role] = {"skipped": True, "reason": "no_v3_config"}
+            # Track stage/mode unchanged for trajectory length consistency
+            getattr(state, hist_attr)["stages"].append(last.stage)
+            getattr(state, hist_attr)["modes"].append(last.mode)
+            state.judge_health_events[role].append({"parse_status": "no_judge"})
             continue
         jr = run_judge(
             last_state=last,
@@ -418,6 +439,9 @@ def _run_judges_post_turn(
             hits=jr.hits,
         )
         setattr(state, attr, new_state)
+        getattr(state, hist_attr)["stages"].append(new_state.stage)
+        getattr(state, hist_attr)["modes"].append(new_state.mode)
+        state.judge_health_events[role].append({"parse_status": jr.meta.get("parse_status", "ok")})
         outputs[role] = {
             "proposed": {
                 "stage": jr.proposed_stage,
@@ -434,6 +458,48 @@ def _run_judges_post_turn(
             "meta": dict(jr.meta),
         }
     return outputs["protagonist"], outputs["counterpart"]
+
+
+def _build_judge_trajectories(state: "SessionState") -> dict:
+    """Pull per-speaker (stages, modes, moves, verdicts) lists from final state."""
+    return {
+        "protagonist": {
+            "stages": list(state.judge_history_protagonist["stages"]),
+            "modes": list(state.judge_history_protagonist["modes"]),
+            "moves": list(state.judge_state_protagonist.move_history) if state.judge_state_protagonist else [],
+            "verdicts": list(state.judge_state_protagonist.verdict_history) if state.judge_state_protagonist else [],
+        },
+        "counterpart": {
+            "stages": list(state.judge_history_counterpart["stages"]),
+            "modes": list(state.judge_history_counterpart["modes"]),
+            "moves": list(state.judge_state_counterpart.move_history) if state.judge_state_counterpart else [],
+            "verdicts": list(state.judge_state_counterpart.verdict_history) if state.judge_state_counterpart else [],
+        },
+    }
+
+
+def _build_judge_health(state: "SessionState") -> dict:
+    """Aggregate per-speaker call counts by parse_status tag.
+
+    Categories: total_calls, ok, parse_fallback (partial|fallback_used), llm_error, no_judge.
+    """
+    def pack(events: list[dict]) -> dict:
+        total = len(events)
+        ok = sum(1 for e in events if e.get("parse_status") == "ok")
+        parse_fallback = sum(1 for e in events if e.get("parse_status") in ("partial", "fallback_used"))
+        llm_error = sum(1 for e in events if e.get("parse_status") == "llm_error")
+        no_judge = sum(1 for e in events if e.get("parse_status") == "no_judge")
+        return {
+            "total_calls": total,
+            "ok": ok,
+            "parse_fallback": parse_fallback,
+            "llm_error": llm_error,
+            "no_judge": no_judge,
+        }
+    return {
+        "protagonist": pack(state.judge_health_events["protagonist"]),
+        "counterpart": pack(state.judge_health_events["counterpart"]),
+    }
 
 
 def _append_session_ledgers(

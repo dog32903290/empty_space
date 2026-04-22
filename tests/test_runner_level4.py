@@ -191,3 +191,31 @@ def test_judge_llm_error_does_not_crash_session(monkeypatch):
     client = PartiallyExplodingClient(responses)
     result = run_session(config=config, llm_client=client)
     assert result.total_turns == 2
+    # meta.yaml should record error
+    meta = yaml.safe_load((result.out_dir / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta["judge_health"]["protagonist"]["llm_error"] >= 1
+
+
+def test_meta_yaml_includes_judge_trajectories_and_health():
+    """After 2-turn session, meta should have both trajectories and health stats."""
+    responses = [
+        "- 醫院\n", "- 醫院\n",
+        "話1", "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "話2", "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=2)
+    client = MockLLMClient(responses)
+    result = run_session(config=config, llm_client=client)
+
+    meta = yaml.safe_load((result.out_dir / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta["judge_trajectories"]["protagonist"]["stages"] == ["初感訊號", "初感訊號"]
+    assert meta["judge_trajectories"]["counterpart"]["stages"] == ["前置積累", "前置積累"]
+    assert meta["judge_trajectories"]["protagonist"]["moves"] == ["advance", "stay"]
+    assert meta["judge_health"]["protagonist"]["total_calls"] == 2
+    assert meta["judge_health"]["protagonist"]["ok"] == 2
+    assert meta["termination"]["reason"] == "max_turns"
+    assert meta["termination"]["turn"] == 2
+    assert meta["interactive_mode"] is False
