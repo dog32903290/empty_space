@@ -1,11 +1,13 @@
 """Run a single experiment session.
 
 Usage:
-    uv run python scripts/run_experiment.py <exp_id>
+    uv run python scripts/run_experiment.py <exp_id> [--interactive]
 
-Example:
+Examples:
     uv run python scripts/run_experiment.py mother_x_son_hospital_v3_001
+    uv run python scripts/run_experiment.py mother_x_son_act1_hospital --interactive
 """
+import argparse
 import sys
 
 from empty_space.llm import GeminiClient
@@ -14,15 +16,19 @@ from empty_space.runner import run_session
 
 
 def main() -> int:
-    if len(sys.argv) != 2:
-        print("Usage: run_experiment.py <exp_id>", file=sys.stderr)
-        return 2
+    ap = argparse.ArgumentParser(description="Run one empty-space experiment session.")
+    ap.add_argument("exp_id", help="experiment id (matches experiments/<exp_id>.yaml)")
+    ap.add_argument(
+        "--interactive",
+        action="store_true",
+        help="Enable interactive director hook at fire_release/basin_lock peaks",
+    )
+    args = ap.parse_args()
 
-    exp_id = sys.argv[1]
-    config = load_experiment(exp_id)
+    config = load_experiment(args.exp_id)
     client = GeminiClient()
 
-    result = run_session(config=config, llm_client=client)
+    result = run_session(config=config, llm_client=client, interactive=args.interactive)
 
     print(f"✓ Completed {result.exp_id}")
     print(f"  Output: {result.out_dir}")

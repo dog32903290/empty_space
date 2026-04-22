@@ -5,6 +5,7 @@ user message is verbatim dialogue history with no tail anchor.
 """
 from empty_space.schemas import (
     InitialState,
+    JudgeState,
     Persona,
     RetrievedImpression,
     Setting,
@@ -38,11 +39,15 @@ def build_system_prompt(
     prelude: str | None = None,
     retrieved_impressions: list[RetrievedImpression] | None = None,
     ambient_echo: list[str] | None = None,
+    judge_state: JudgeState | None = None,
+    stage_mode_contexts: dict[str, dict[str, str]] | None = None,
 ) -> str:
     """Assemble the system prompt for one role's turn.
 
     Block order (spec §4.1): 貫通軸 → 關係層 → 此刻 → 現場 → 輸出格式.
-    `ambient_echo` is a Phase 4 hook; Phase 2 callers pass None or [].
+
+    Level 4: 此刻 block reads from judge_state + stage_mode_contexts cell
+    if provided; otherwise falls back to initial_state (Level 3 behavior).
     """
     _ = ambient_echo  # reserved for Phase 4
     relationship_text = persona.relationship_texts.get(counterpart_name, "")
@@ -53,12 +58,11 @@ def build_system_prompt(
 
     blocks.append(f"## 關係層：對{counterpart_name}\n{relationship_text.rstrip()}")
 
-    blocks.append(
-        "## 此刻\n"
-        f"動作詞：{initial_state.verb}\n"
-        f"階段：{initial_state.stage}\n"
-        f"模式：{initial_state.mode}"
-    )
+    blocks.append(_build_此刻_block(
+        judge_state=judge_state,
+        stage_mode_contexts=stage_mode_contexts,
+        initial_state=initial_state,
+    ))
 
     scene_parts: list[str] = [setting.content.rstrip()]
     if scene_premise is not None:
@@ -83,6 +87,45 @@ def build_system_prompt(
     blocks.append(f"## 輸出格式\n{_OUTPUT_FORMAT_INSTRUCTION}")
 
     return "\n\n".join(blocks)
+
+
+def _build_此刻_block(
+    *,
+    judge_state: JudgeState | None,
+    stage_mode_contexts: dict[str, dict[str, str]] | None,
+    initial_state: InitialState,
+) -> str:
+    """Render the ## 此刻 block, preferring judge_state + cell context.
+
+    Fallback order:
+    1. judge_state + cell found → full render (stage/mode/body/voice/attention)
+    2. judge_state + cell missing → minimal render (stage/mode only)
+    3. judge_state None → legacy render (verb/stage/mode from initial_state)
+    """
+    if judge_state is None:
+        return (
+            "## 此刻\n"
+            f"動作詞：{initial_state.verb}\n"
+            f"階段：{initial_state.stage}\n"
+            f"模式：{initial_state.mode}"
+        )
+
+    cell_key = f"{judge_state.stage}_{judge_state.mode}"
+    cell = (stage_mode_contexts or {}).get(cell_key)
+
+    lines = [
+        "## 此刻",
+        f"階段：{judge_state.stage}",
+        f"模式：{judge_state.mode}",
+    ]
+    if cell:
+        if cell.get("身體傾向"):
+            lines.append(f"身體傾向：{cell['身體傾向']}")
+        if cell.get("語聲傾向"):
+            lines.append(f"語聲傾向：{cell['語聲傾向']}")
+        if cell.get("注意力"):
+            lines.append(f"注意力：{cell['注意力']}")
+    return "\n".join(lines)
 
 
 def build_user_message(history: list[Turn]) -> str:

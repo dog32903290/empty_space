@@ -23,8 +23,8 @@ counterpart_prelude: |
 
 initial_state:
   verb: 承受（闖入）
-  stage: 靜置
-  mode: 裸露
+  stage: 回溫期
+  mode: 在
 
 director_events: {}
 

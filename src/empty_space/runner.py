@@ -28,9 +28,17 @@ from empty_space.parser import parse_response
 from empty_space.paths import RUNS_DIR
 from empty_space.prompt_assembler import build_system_prompt, build_user_message
 from empty_space.retrieval import load_synonym_map, run_session_start_retrieval
+from empty_space.judge import (
+    STAGE_ORDER,
+    apply_stage_target,
+    is_basin_lock,
+    is_fire_release,
+    run_judge,
+)
 from empty_space.schemas import (
     ComposerSessionResult,
     ExperimentConfig,
+    JudgeState,
     Persona,
     RetrievalResult,
     SessionResult,
@@ -56,10 +64,24 @@ class SessionState:
     active_events: list[tuple[int, str]] = field(default_factory=list)
     retrieval_protagonist: RetrievalResult | None = None
     retrieval_counterpart: RetrievalResult | None = None
+    # Level 4:
+    judge_state_protagonist: JudgeState | None = None
+    judge_state_counterpart: JudgeState | None = None
+    director_injections: list[dict] = field(default_factory=list)
+    # Bookkeeping for meta.yaml aggregation:
+    judge_history_protagonist: dict = field(
+        default_factory=lambda: {"stages": [], "modes": []}
+    )
+    judge_history_counterpart: dict = field(
+        default_factory=lambda: {"stages": [], "modes": []}
+    )
+    judge_health_events: dict = field(
+        default_factory=lambda: {"protagonist": [], "counterpart": []}
+    )
 
 
 def run_session(
-    *, config: ExperimentConfig, llm_client: LLMClient
+    *, config: ExperimentConfig, llm_client: LLMClient, interactive: bool = False
 ) -> SessionResult:
     """Run one experiment session end-to-end."""
     protagonist = load_persona(config.protagonist.path, version=config.protagonist.version)
@@ -109,6 +131,9 @@ def run_session(
         retrieval_counterpart=retrieval_counterpart,
     )
 
+    state.judge_state_protagonist = _init_judge_state("protagonist", config.initial_state)
+    state.judge_state_counterpart = _init_judge_state("counterpart", config.initial_state)
+
     start_time = time.monotonic()
     events_triggered: list[tuple[int, str]] = []
 
@@ -135,6 +160,15 @@ def run_session(
         )
 
         # 3. prompts
+        active_judge_state = (
+            state.judge_state_protagonist if speaker_role == "protagonist"
+            else state.judge_state_counterpart
+        )
+        active_persona_contexts = (
+            speaker_persona.stage_mode_contexts_parsed
+            if speaker_persona.stage_mode_contexts_parsed
+            else None
+        )
         system_prompt = build_system_prompt(
             persona=speaker_persona,
             counterpart_name=other_party_name,
@@ -144,6 +178,8 @@ def run_session(
             active_events=state.active_events,
             prelude=role_prelude,
             retrieved_impressions=role_retrieval.impressions,
+            judge_state=active_judge_state,
+            stage_mode_contexts=active_persona_contexts,
         )
         user_message = build_user_message(history=state.turns)
 
@@ -178,11 +214,49 @@ def run_session(
         )
         state.turns.append(turn)
 
+        # Level 4: run Judge for both speakers after this turn
+        judge_out_p, judge_out_c = _run_judges_post_turn(state, llm_client)
+
+        # Level 4: interactive peak hook (may inject director event for next turn)
+        director_injection = None
+        if interactive:
+            peak, triggered_by = _is_peak(state)
+            if peak:
+                event_text = _prompt_for_director_event(
+                    turn_number=n,
+                    state_p=state.judge_state_protagonist,
+                    state_c=state.judge_state_counterpart,
+                    triggered_by=triggered_by,
+                )
+                if event_text:
+                    next_turn = n + 1
+                    state.config.director_events[next_turn] = event_text
+                    director_injection = {
+                        "event": event_text,
+                        "triggered_by": triggered_by,
+                        "applied_to_turn": next_turn,
+                    }
+                    state.director_injections.append({
+                        "turn": n, "event": event_text, "triggered_by": triggered_by,
+                    })
+
         # 7. append
-        append_turn(out_dir, turn)
+        append_turn(
+            out_dir, turn,
+            judge_output_protagonist=judge_out_p,
+            judge_output_counterpart=judge_out_c,
+            director_injection=director_injection,
+        )
+
+        # Level 4: termination check
+        should_stop, reason = _should_terminate(state)
+        if should_stop:
+            termination_reason = reason
+            break
+    else:
+        termination_reason = "max_turns"
 
     duration = time.monotonic() - start_time
-    termination_reason = "max_turns"
 
     total_tokens_in = sum(t.tokens_in for t in state.turns)
     total_tokens_out = sum(t.tokens_out for t in state.turns)
@@ -242,6 +316,12 @@ def run_session(
         protagonist_refined_added=composer_result.protagonist_refined_added,
         counterpart_refined_added=composer_result.counterpart_refined_added,
         composer_parse_error=composer_result.parse_error,
+        # Level 4:
+        judge_trajectories=_build_judge_trajectories(state),
+        judge_health=_build_judge_health(state),
+        termination_turn=len(state.turns),
+        director_injections=list(state.director_injections),
+        interactive_mode=interactive,
     )
 
     return SessionResult(
@@ -295,6 +375,224 @@ def _run_composer_at_session_end(
             protagonist_refined_added=0, counterpart_refined_added=0,
             parse_error=f"composer exception: {type(e).__name__}: {e}",
         )
+
+
+def _init_judge_state(
+    speaker_role: str, initial_state
+) -> JudgeState:
+    """Seed JudgeState from experiment's initial_state (InitialState).
+
+    initial_state.mode is already v3-migrated by the pydantic validator
+    (legacy '基線' → '在').
+    """
+    return JudgeState(
+        speaker_role=speaker_role,  # type: ignore[arg-type]
+        stage=initial_state.stage,
+        mode=initial_state.mode,
+        last_why="",
+        last_verdict="",
+        move_history=[],
+        verdict_history=[],
+        hits_history=[],
+    )
+
+
+def _should_run_judge(persona: Persona) -> bool:
+    """Judge only runs for personas with both v3 files present."""
+    return bool(persona.judge_principles_text) and bool(persona.stage_mode_contexts_parsed)
+
+
+def _stage_mode_contexts_text(persona: Persona) -> str:
+    """Render persona.stage_mode_contexts_parsed as readable text for Judge prompt."""
+    if not persona.stage_mode_contexts_parsed:
+        return ""
+    lines: list[str] = []
+    for key, cell in persona.stage_mode_contexts_parsed.items():
+        lines.append(f"{key}:")
+        for field_name in ("身體傾向", "語聲傾向", "注意力"):
+            if cell.get(field_name):
+                lines.append(f"  {field_name}: {cell[field_name]}")
+    return "\n".join(lines)
+
+
+def _format_recent_turns(turns: list[Turn], n: int = 3) -> str:
+    """Render last n turns as readable text for Judge prompt."""
+    if not turns:
+        return "（尚無對話）"
+    tail = turns[-n:]
+    return "\n".join(
+        f"[Turn {t.turn_number} {t.persona_name}] {t.content}"
+        for t in tail
+    )
+
+
+def _run_judges_post_turn(
+    state: "SessionState",
+    llm_client,
+) -> tuple[dict, dict]:
+    """Run Judge for both speakers (if eligible). Returns (p_output_dict, c_output_dict).
+
+    Updates state.judge_state_protagonist and state.judge_state_counterpart via
+    apply_stage_target. Also appends to bookkeeping fields:
+      state.judge_history_{protagonist,counterpart}.{stages,modes}
+      state.judge_health_events.{protagonist,counterpart}  (parse_status tag per call)
+    """
+    recent = _format_recent_turns(state.turns, n=3)
+    outputs: dict[str, dict] = {}
+
+    for role, persona, attr, hist_attr in (
+        ("protagonist", state.protagonist, "judge_state_protagonist", "judge_history_protagonist"),
+        ("counterpart", state.counterpart, "judge_state_counterpart", "judge_history_counterpart"),
+    ):
+        last = getattr(state, attr)
+        if not _should_run_judge(persona):
+            outputs[role] = {"skipped": True, "reason": "no_v3_config"}
+            # Track stage/mode unchanged for trajectory length consistency
+            getattr(state, hist_attr)["stages"].append(last.stage)
+            getattr(state, hist_attr)["modes"].append(last.mode)
+            state.judge_health_events[role].append({"parse_status": "no_judge"})
+            continue
+        jr = run_judge(
+            last_state=last,
+            principles_text=persona.judge_principles_text,
+            stage_mode_contexts_text=_stage_mode_contexts_text(persona),
+            recent_turns_text=recent,
+            speaker_role=role,
+            persona_name=persona.name,
+            llm_client=llm_client,
+        )
+        new_state, move = apply_stage_target(
+            last_state=last,
+            proposed_stage=jr.proposed_stage,
+            proposed_mode=jr.proposed_mode,
+            proposed_verdict=jr.proposed_verdict,
+            why=jr.why,
+            hits=jr.hits,
+        )
+        setattr(state, attr, new_state)
+        getattr(state, hist_attr)["stages"].append(new_state.stage)
+        getattr(state, hist_attr)["modes"].append(new_state.mode)
+        state.judge_health_events[role].append({"parse_status": jr.meta.get("parse_status", "ok")})
+        outputs[role] = {
+            "proposed": {
+                "stage": jr.proposed_stage,
+                "mode": jr.proposed_mode,
+                "verdict": jr.proposed_verdict,
+                "why": jr.why,
+            },
+            "applied": {
+                "stage": new_state.stage,
+                "mode": new_state.mode,
+                "move": move,
+            },
+            "hits": list(jr.hits),
+            "meta": dict(jr.meta),
+        }
+    return outputs["protagonist"], outputs["counterpart"]
+
+
+def _build_judge_trajectories(state: "SessionState") -> dict:
+    """Pull per-speaker (stages, modes, moves, verdicts) lists from final state."""
+    return {
+        "protagonist": {
+            "stages": list(state.judge_history_protagonist["stages"]),
+            "modes": list(state.judge_history_protagonist["modes"]),
+            "moves": list(state.judge_state_protagonist.move_history) if state.judge_state_protagonist else [],
+            "verdicts": list(state.judge_state_protagonist.verdict_history) if state.judge_state_protagonist else [],
+        },
+        "counterpart": {
+            "stages": list(state.judge_history_counterpart["stages"]),
+            "modes": list(state.judge_history_counterpart["modes"]),
+            "moves": list(state.judge_state_counterpart.move_history) if state.judge_state_counterpart else [],
+            "verdicts": list(state.judge_state_counterpart.verdict_history) if state.judge_state_counterpart else [],
+        },
+    }
+
+
+def _build_judge_health(state: "SessionState") -> dict:
+    """Aggregate per-speaker call counts by parse_status tag.
+
+    Categories: total_calls, ok, parse_fallback (partial|fallback_used), llm_error, no_judge.
+    """
+    def pack(events: list[dict]) -> dict:
+        total = len(events)
+        ok = sum(1 for e in events if e.get("parse_status") == "ok")
+        parse_fallback = sum(1 for e in events if e.get("parse_status") in ("partial", "fallback_used"))
+        llm_error = sum(1 for e in events if e.get("parse_status") == "llm_error")
+        no_judge = sum(1 for e in events if e.get("parse_status") == "no_judge")
+        return {
+            "total_calls": total,
+            "ok": ok,
+            "parse_fallback": parse_fallback,
+            "llm_error": llm_error,
+            "no_judge": no_judge,
+        }
+    return {
+        "protagonist": pack(state.judge_health_events["protagonist"]),
+        "counterpart": pack(state.judge_health_events["counterpart"]),
+    }
+
+
+def _should_terminate(state: "SessionState", consecutive_required: int = 2) -> tuple[bool, str]:
+    """Check whether session should stop after the current turn.
+
+    Returns (should_stop, reason). Reason is "dual_basin_lock" or "" (no stop).
+    Requires BOTH speakers' verdict_history to end with `consecutive_required`
+    basin_lock verdicts. Single-speaker basin_lock does not terminate.
+    """
+    jp, jc = state.judge_state_protagonist, state.judge_state_counterpart
+    if jp is None or jc is None:
+        return False, ""
+
+    def last_n_all_basin(s: JudgeState, n: int) -> bool:
+        h = s.verdict_history
+        if len(h) < n:
+            return False
+        return all(v == "basin_lock" for v in h[-n:])
+
+    if last_n_all_basin(jp, consecutive_required) and last_n_all_basin(jc, consecutive_required):
+        return True, "dual_basin_lock"
+    return False, ""
+
+
+def _is_peak(state: "SessionState") -> tuple[bool, str]:
+    """Return (is_peak, triggered_by) for the most recently completed turn.
+
+    Peak = any speaker's last_verdict is fire_release or basin_lock.
+    Priority: fire_release > basin_lock (fire more urgent); protagonist > counterpart (tiebreak).
+    """
+    jp, jc = state.judge_state_protagonist, state.judge_state_counterpart
+    # Fire first (urgency), then basin
+    if jp and is_fire_release(jp):
+        return True, "fire_release on protagonist"
+    if jc and is_fire_release(jc):
+        return True, "fire_release on counterpart"
+    if jp and is_basin_lock(jp):
+        return True, "basin_lock on protagonist"
+    if jc and is_basin_lock(jc):
+        return True, "basin_lock on counterpart"
+    return False, ""
+
+
+def _prompt_for_director_event(
+    *,
+    turn_number: int,
+    state_p: JudgeState,
+    state_c: JudgeState,
+    triggered_by: str,
+) -> str | None:
+    """Block stdin for director input. Empty line or EOF → None (skip)."""
+    print(f"\n{'='*60}")
+    print(f"[PEAK @ turn {turn_number}] {triggered_by}")
+    print(f"  protagonist: stage={state_p.stage}, mode={state_p.mode}, verdict={state_p.last_verdict}")
+    print(f"  counterpart: stage={state_c.stage}, mode={state_c.mode}, verdict={state_c.last_verdict}")
+    print(f"{'='*60}")
+    print("導演介入？輸入事件（空行=跳過）：")
+    try:
+        line = input().strip()
+    except EOFError:
+        return None
+    return line if line else None
 
 
 def _append_session_ledgers(

@@ -20,6 +20,8 @@ from empty_space.schemas import (
     Termination,
 )
 
+_JS = "STAGE: 前置積累\nMODE: 在\nWHY: -\nVERDICT: N/A\nHITS: -\n"
+
 
 class MockLLMClient:
     """Pre-scheduled responses keyed by call order. Records all calls."""
@@ -67,9 +69,13 @@ def test_happy_path_runs_all_turns(minimal_config, tmp_path, monkeypatch):
         "- 醫院\n- 父親\n",   # NEW: protagonist extract_symbols
         "- 醫院\n- 父親\n",   # NEW: counterpart extract_symbols
         "你回來了。",
+        _JS, _JS,  # Judge both after turn 1
         "嗯。",
+        _JS, _JS,  # Judge both after turn 2
         "⋯⋯",
+        _JS, _JS,  # Judge both after turn 3
         "不關我的事。",
+        _JS, _JS,  # Judge both after turn 4
         "母親: []\n兒子: []\n",  # composer noop
     ]
     client = MockLLMClient(responses)
@@ -94,7 +100,10 @@ def test_speaker_alternation_mother_starts(minimal_config, tmp_path, monkeypatch
     client = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
-        "你回來了。", "嗯。", "⋯⋯", "不關我的事。",
+        "你回來了。", _JS, _JS,
+        "嗯。", _JS, _JS,
+        "⋯⋯", _JS, _JS,
+        "不關我的事。", _JS, _JS,
         "母親: []\n兒子: []\n",  # composer noop
     ])
     result = run_session(config=minimal_config, llm_client=client)
@@ -116,15 +125,18 @@ def test_system_prompt_contains_correct_persona_per_turn(minimal_config, tmp_pat
     client = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols (call 0)
         "- 醫院\n- 父親\n",   # counterpart extract_symbols (call 1)
-        "a", "b", "c", "d",  # turn calls (calls 2-5)
-        "母親: []\n兒子: []\n",  # composer noop (call 6)
+        "a", _JS, _JS,        # turn 1 (call 2) + Judge both (calls 3-4)
+        "b", _JS, _JS,        # turn 2 (call 5) + Judge both (calls 6-7)
+        "c", _JS, _JS,        # turn 3 (call 8) + Judge both (calls 9-10)
+        "d", _JS, _JS,        # turn 4 (call 11) + Judge both (calls 12-13)
+        "母親: []\n兒子: []\n",  # composer noop (call 14)
     ])
     run_session(config=minimal_config, llm_client=client)
 
     # Calls 0-1 are extract_symbols; Turn 1 is call 2 (母親/protagonist)
     assert "## 關係層：對兒子" in client.calls[2]["system"]
-    # Turn 2 is call 3 (兒子/counterpart)
-    assert "## 關係層：對母親" in client.calls[3]["system"]
+    # Turn 2 is call 5 (兒子/counterpart) — calls 3-4 are Judge calls after turn 1
+    assert "## 關係層：對母親" in client.calls[5]["system"]
 
 
 def test_candidate_impressions_extracted_and_stored(minimal_config, tmp_path, monkeypatch):
@@ -139,9 +151,13 @@ def test_candidate_impressions_extracted_and_stored(minimal_config, tmp_path, mo
 - text: "她的聲音放輕了一層"
   symbols: [克制, 靠近]
 """,
+        _JS, _JS,  # Judge both after turn 1
         "嗯。",
+        _JS, _JS,  # Judge both after turn 2
         "⋯⋯",
+        _JS, _JS,  # Judge both after turn 3
         "不關我的事。",
+        _JS, _JS,  # Judge both after turn 4
         "母親: []\n兒子: []\n",  # composer noop
     ]
     client = MockLLMClient(responses)
@@ -169,17 +185,25 @@ def test_director_event_injected_into_system_from_trigger_turn(
         # No scene_premise/preludes → _compose_query returns "" → extract_symbols
         # skips the LLM call → no prepended extract responses needed.
     )
-    client = MockLLMClient(["a", "b", "c", "d", "e", "母親: []\n兒子: []\n"])
+    client = MockLLMClient([
+        "a", _JS, _JS,  # turn 1 + Judge
+        "b", _JS, _JS,  # turn 2 + Judge
+        "c", _JS, _JS,  # turn 3 + Judge
+        "d", _JS, _JS,  # turn 4 + Judge
+        "e", _JS, _JS,  # turn 5 + Judge
+        "母親: []\n兒子: []\n",
+    ])
     run_session(config=config, llm_client=client)
 
-    # No extract_symbols calls (empty query). Turn 1 is call 0, Turn 2 is call 1, etc.
+    # No extract_symbols calls (empty query).
+    # Call indices: turn1=0, turn2=3, turn3=6, turn4=9, turn5=12
     # Turn 1-2 system prompts should NOT contain the event (it triggers at Turn 3)
     assert "護士推一張空床進病房" not in client.calls[0]["system"]
-    assert "護士推一張空床進病房" not in client.calls[1]["system"]
+    assert "護士推一張空床進病房" not in client.calls[3]["system"]
     # Turn 3 onwards SHOULD contain it
-    assert "Turn 3：護士推一張空床進病房" in client.calls[2]["system"]
-    assert "Turn 3：護士推一張空床進病房" in client.calls[3]["system"]
-    assert "Turn 3：護士推一張空床進病房" in client.calls[4]["system"]
+    assert "Turn 3：護士推一張空床進病房" in client.calls[6]["system"]
+    assert "Turn 3：護士推一張空床進病房" in client.calls[9]["system"]
+    assert "Turn 3：護士推一張空床進病房" in client.calls[12]["system"]
 
 
 def test_director_events_accumulate_across_turns(tmp_path, monkeypatch):
@@ -195,11 +219,18 @@ def test_director_events_accumulate_across_turns(tmp_path, monkeypatch):
         max_turns=5,
         # No scene_premise/preludes → no extract_symbols LLM calls.
     )
-    client = MockLLMClient(["a", "b", "c", "d", "e", "母親: []\n兒子: []\n"])
+    client = MockLLMClient([
+        "a", _JS, _JS,  # turn 1 + Judge
+        "b", _JS, _JS,  # turn 2 + Judge
+        "c", _JS, _JS,  # turn 3 + Judge
+        "d", _JS, _JS,  # turn 4 + Judge
+        "e", _JS, _JS,  # turn 5 + Judge
+        "母親: []\n兒子: []\n",
+    ])
     run_session(config=config, llm_client=client)
 
-    # No extract_symbols calls. Turn 5 is call index 4.
-    sys5 = client.calls[4]["system"]
+    # No extract_symbols calls. Turn 5 dialogue is call index 12.
+    sys5 = client.calls[12]["system"]
     assert "Turn 2：event A" in sys5
     assert "Turn 4：event B" in sys5
     assert sys5.index("Turn 2：event A") < sys5.index("Turn 4：event B")
@@ -222,7 +253,12 @@ def test_parse_error_recorded_but_session_continues(tmp_path, monkeypatch):
 ---IMPRESSIONS---
 - text: "unclosed
 """
-    client = MockLLMClient([broken_yaml_response, "嗯。", "⋯⋯", "母親: []\n兒子: []\n"])
+    client = MockLLMClient([
+        broken_yaml_response, _JS, _JS,
+        "嗯。", _JS, _JS,
+        "⋯⋯", _JS, _JS,
+        "母親: []\n兒子: []\n",
+    ])
     result = run_session(config=config, llm_client=client)
 
     assert result.total_turns == 3
@@ -242,7 +278,8 @@ def test_max_turns_terminates_session(tmp_path, monkeypatch, minimal_config):
     client = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
-        "a", "b",
+        "a", _JS, _JS,
+        "b", _JS, _JS,
         "母親: []\n兒子: []\n",  # composer noop
     ])
     result = run_session(config=config, llm_client=client)
@@ -264,9 +301,21 @@ def test_llm_exception_aborts_session_partial_turns_kept(
         def generate(self, *, system, user, model="gemini-2.5-flash"):
             self.call_count += 1
             # Calls 1-2 are extract_symbols (protagonist + counterpart).
-            # Calls 3-4 are turn 1 and turn 2. Call 5 = turn 3 → BOOM.
-            if self.call_count == 5:
+            # Call 3 = turn 1 dialogue, calls 4-5 = Judge P+C.
+            # Call 6 = turn 2 dialogue, calls 7-8 = Judge P+C.
+            # Call 9 = turn 3 dialogue → BOOM.
+            if self.call_count == 9:
                 raise RuntimeError("network boom")
+            # Judge calls return valid stay responses
+            if "隱性量測者" in system:
+                return GeminiResponse(
+                    content=_JS,
+                    raw=None,
+                    tokens_in=1,
+                    tokens_out=1,
+                    model=model,
+                    latency_ms=1,
+                )
             return GeminiResponse(
                 content="x",
                 raw=None,
@@ -300,7 +349,10 @@ def test_two_runs_of_same_exp_create_distinct_timestamp_dirs(
     client1 = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
-        "a", "b", "c", "d",
+        "a", _JS, _JS,
+        "b", _JS, _JS,
+        "c", _JS, _JS,
+        "d", _JS, _JS,
         "母親: []\n兒子: []\n",  # composer noop
     ])
     result1 = run_session(config=minimal_config, llm_client=client1)
@@ -312,7 +364,10 @@ def test_two_runs_of_same_exp_create_distinct_timestamp_dirs(
     client2 = MockLLMClient([
         "- 醫院\n- 父親\n",   # protagonist extract_symbols
         "- 醫院\n- 父親\n",   # counterpart extract_symbols
-        "x", "y", "z", "w",
+        "x", _JS, _JS,
+        "y", _JS, _JS,
+        "z", _JS, _JS,
+        "w", _JS, _JS,
         "母親: []\n兒子: []\n",  # composer noop
     ])
     result2 = run_session(config=minimal_config, llm_client=client2)
@@ -331,7 +386,10 @@ def test_composer_runs_at_session_end(minimal_config, tmp_path, monkeypatch):
 
     responses = [
         "- 醫院\n", "- 醫院\n",
-        "你回來了。", "嗯。", "⋯⋯", "不關我的事。",
+        "你回來了。", _JS, _JS,
+        "嗯。", _JS, _JS,
+        "⋯⋯", _JS, _JS,
+        "不關我的事。", _JS, _JS,
         # Composer with actual drafts
         "母親:\n  - text: \"沉默時收縮\"\n    symbols: [沉默]\n    source_raw_ids: [imp_001]\n\n兒子:\n  - text: \"背靠冰冷\"\n    symbols: [背]\n    source_raw_ids: [imp_001]\n",
     ]
@@ -360,7 +418,10 @@ def test_composer_failure_doesnt_break_session(minimal_config, tmp_path, monkeyp
         "- 醫院\n", "- 醫院\n",
         # Include impression in turn 1 so raw ledger gets written
         "a\n\n---IMPRESSIONS---\n- text: \"raw impression\"\n  symbols: [醫院]\n",
-        "b", "c", "d",
+        _JS, _JS,
+        "b", _JS, _JS,
+        "c", _JS, _JS,
+        "d", _JS, _JS,
         "garbage [[[ not yaml",   # composer bad YAML
     ]
     client = MockLLMClient(responses)
@@ -389,7 +450,10 @@ def test_second_session_retrieval_reads_refined(minimal_config, tmp_path, monkey
     # Session 1
     responses_1 = [
         "- 醫院\n- 父親\n", "- 醫院\n- 父親\n",
-        "a", "b", "c", "d",
+        "a", _JS, _JS,
+        "b", _JS, _JS,
+        "c", _JS, _JS,
+        "d", _JS, _JS,
         "母親:\n  - text: \"醫院走廊長\"\n    symbols: [醫院, 走廊]\n    source_raw_ids: [imp_001]\n\n兒子:\n  - text: \"父親的門關著\"\n    symbols: [父親, 門]\n    source_raw_ids: [imp_001]\n",
     ]
     run_session(config=minimal_config, llm_client=MockLLMClient(responses_1))
@@ -397,7 +461,10 @@ def test_second_session_retrieval_reads_refined(minimal_config, tmp_path, monkey
     # Session 2
     responses_2 = [
         "- 醫院\n", "- 父親\n",
-        "e", "f", "g", "h",
+        "e", _JS, _JS,
+        "f", _JS, _JS,
+        "g", _JS, _JS,
+        "h", _JS, _JS,
         "母親: []\n兒子: []\n",
     ]
     client = MockLLMClient(responses_2)
