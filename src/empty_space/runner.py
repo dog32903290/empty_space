@@ -28,9 +28,17 @@ from empty_space.parser import parse_response
 from empty_space.paths import RUNS_DIR
 from empty_space.prompt_assembler import build_system_prompt, build_user_message
 from empty_space.retrieval import load_synonym_map, run_session_start_retrieval
+from empty_space.judge import (
+    STAGE_ORDER,
+    apply_stage_target,
+    is_basin_lock,
+    is_fire_release,
+    run_judge,
+)
 from empty_space.schemas import (
     ComposerSessionResult,
     ExperimentConfig,
+    JudgeState,
     Persona,
     RetrievalResult,
     SessionResult,
@@ -56,6 +64,10 @@ class SessionState:
     active_events: list[tuple[int, str]] = field(default_factory=list)
     retrieval_protagonist: RetrievalResult | None = None
     retrieval_counterpart: RetrievalResult | None = None
+    # Level 4:
+    judge_state_protagonist: JudgeState | None = None
+    judge_state_counterpart: JudgeState | None = None
+    director_injections: list[dict] = field(default_factory=list)
 
 
 def run_session(
@@ -108,6 +120,9 @@ def run_session(
         retrieval_protagonist=retrieval_protagonist,
         retrieval_counterpart=retrieval_counterpart,
     )
+
+    state.judge_state_protagonist = _init_judge_state("protagonist", config.initial_state)
+    state.judge_state_counterpart = _init_judge_state("counterpart", config.initial_state)
 
     start_time = time.monotonic()
     events_triggered: list[tuple[int, str]] = []
@@ -295,6 +310,44 @@ def _run_composer_at_session_end(
             protagonist_refined_added=0, counterpart_refined_added=0,
             parse_error=f"composer exception: {type(e).__name__}: {e}",
         )
+
+
+def _init_judge_state(
+    speaker_role: str, initial_state
+) -> JudgeState:
+    """Seed JudgeState from experiment's initial_state (InitialState).
+
+    initial_state.mode is already v3-migrated by the pydantic validator
+    (legacy '基線' → '在').
+    """
+    return JudgeState(
+        speaker_role=speaker_role,  # type: ignore[arg-type]
+        stage=initial_state.stage,
+        mode=initial_state.mode,
+        last_why="",
+        last_verdict="",
+        move_history=[],
+        verdict_history=[],
+        hits_history=[],
+    )
+
+
+def _should_run_judge(persona: Persona) -> bool:
+    """Judge only runs for personas with both v3 files present."""
+    return bool(persona.judge_principles_text) and bool(persona.stage_mode_contexts_parsed)
+
+
+def _stage_mode_contexts_text(persona: Persona) -> str:
+    """Render persona.stage_mode_contexts_parsed as readable text for Judge prompt."""
+    if not persona.stage_mode_contexts_parsed:
+        return ""
+    lines: list[str] = []
+    for key, cell in persona.stage_mode_contexts_parsed.items():
+        lines.append(f"{key}:")
+        for field_name in ("身體傾向", "語聲傾向", "注意力"):
+            if cell.get(field_name):
+                lines.append(f"  {field_name}: {cell[field_name]}")
+    return "\n".join(lines)
 
 
 def _append_session_ledgers(
