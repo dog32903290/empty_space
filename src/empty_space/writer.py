@@ -178,6 +178,13 @@ def write_meta(
     retrieval_total_tokens_in: int = 0,
     retrieval_total_tokens_out: int = 0,
     ledger_appends: list[dict] | None = None,
+    # Level 3 new:
+    composer_tokens_in: int = 0,
+    composer_tokens_out: int = 0,
+    composer_latency_ms: int = 0,
+    protagonist_refined_added: int = 0,
+    counterpart_refined_added: int = 0,
+    composer_parse_error: str | None = None,
 ) -> None:
     """Write meta.yaml with session-level summary."""
     meta = {
@@ -197,6 +204,13 @@ def write_meta(
         "retrieval_total_tokens_in": retrieval_total_tokens_in,
         "retrieval_total_tokens_out": retrieval_total_tokens_out,
         "ledger_appends": ledger_appends or [],
+        # Level 3 new:
+        "composer_tokens_in": composer_tokens_in,
+        "composer_tokens_out": composer_tokens_out,
+        "composer_latency_ms": composer_latency_ms,
+        "protagonist_refined_added": protagonist_refined_added,
+        "counterpart_refined_added": counterpart_refined_added,
+        "composer_parse_error": composer_parse_error,
     }
     _atomic_write_yaml(out_dir / "meta.yaml", meta)
 

@@ -428,3 +428,49 @@ def test_write_meta_records_retrieval_and_ledger_fields(tmp_path, sample_config)
     assert meta["retrieval_total_tokens_out"] == 55
     assert len(meta["ledger_appends"]) == 2
     assert meta["ledger_appends"][0]["candidates_added"] == 2
+
+
+def test_write_meta_records_composer_fields(tmp_path, sample_config):
+    out_dir = tmp_path / "run"
+    init_run(out_dir, sample_config)
+
+    write_meta(
+        out_dir=out_dir,
+        config=sample_config,
+        total_turns=2,
+        termination_reason="max_turns",
+        total_tokens_in=100,
+        total_tokens_out=20,
+        total_candidate_impressions=3,
+        turns_with_parse_error=0,
+        director_events_triggered=[],
+        models_used=["gemini-2.5-flash", "gemini-2.5-pro"],
+        duration_seconds=5.0,
+        retrieval_total_tokens_in=100,
+        retrieval_total_tokens_out=20,
+        ledger_appends=[],
+        # Level 3 new kwargs:
+        composer_tokens_in=4321,
+        composer_tokens_out=678,
+        composer_latency_ms=15234,
+        protagonist_refined_added=4,
+        counterpart_refined_added=3,
+        composer_parse_error=None,
+    )
+    meta = yaml.safe_load((out_dir / "meta.yaml").read_text(encoding="utf-8"))
+    assert meta["composer_tokens_in"] == 4321
+    assert meta["composer_tokens_out"] == 678
+    assert meta["composer_latency_ms"] == 15234
+    assert meta["protagonist_refined_added"] == 4
+    assert meta["counterpart_refined_added"] == 3
+    assert meta["composer_parse_error"] is None
+
+
+def test_write_meta_composer_fields_default_to_zero():
+    """Composer kwargs should all have defaults (backward compat)."""
+    import inspect
+    sig = inspect.signature(write_meta)
+    for name in ["composer_tokens_in", "composer_tokens_out", "composer_latency_ms",
+                 "protagonist_refined_added", "counterpart_refined_added", "composer_parse_error"]:
+        assert name in sig.parameters, f"{name} missing from write_meta signature"
+        assert sig.parameters[name].default is not inspect.Parameter.empty, f"{name} has no default"
