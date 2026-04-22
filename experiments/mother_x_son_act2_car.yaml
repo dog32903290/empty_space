@@ -23,8 +23,8 @@ counterpart_prelude: |
 
 initial_state:
   verb: 承受（並行）
-  stage: 餘震
-  mode: 封閉
+  stage: 穩定期
+  mode: 收
 
 director_events: {}
 
