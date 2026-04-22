@@ -150,6 +150,15 @@ def run_session(
         )
 
         # 3. prompts
+        active_judge_state = (
+            state.judge_state_protagonist if speaker_role == "protagonist"
+            else state.judge_state_counterpart
+        )
+        active_persona_contexts = (
+            speaker_persona.stage_mode_contexts_parsed
+            if speaker_persona.stage_mode_contexts_parsed
+            else None
+        )
         system_prompt = build_system_prompt(
             persona=speaker_persona,
             counterpart_name=other_party_name,
@@ -159,6 +168,8 @@ def run_session(
             active_events=state.active_events,
             prelude=role_prelude,
             retrieved_impressions=role_retrieval.impressions,
+            judge_state=active_judge_state,
+            stage_mode_contexts=active_persona_contexts,
         )
         user_message = build_user_message(history=state.turns)
 
@@ -193,8 +204,15 @@ def run_session(
         )
         state.turns.append(turn)
 
+        # Level 4: run Judge for both speakers after this turn
+        judge_out_p, judge_out_c = _run_judges_post_turn(state, llm_client)
+
         # 7. append
-        append_turn(out_dir, turn)
+        append_turn(
+            out_dir, turn,
+            judge_output_protagonist=judge_out_p,
+            judge_output_counterpart=judge_out_c,
+        )
 
     duration = time.monotonic() - start_time
     termination_reason = "max_turns"
@@ -348,6 +366,74 @@ def _stage_mode_contexts_text(persona: Persona) -> str:
             if cell.get(field_name):
                 lines.append(f"  {field_name}: {cell[field_name]}")
     return "\n".join(lines)
+
+
+def _format_recent_turns(turns: list[Turn], n: int = 3) -> str:
+    """Render last n turns as readable text for Judge prompt."""
+    if not turns:
+        return "（尚無對話）"
+    tail = turns[-n:]
+    return "\n".join(
+        f"[Turn {t.turn_number} {t.persona_name}] {t.content}"
+        for t in tail
+    )
+
+
+def _run_judges_post_turn(
+    state: "SessionState",
+    llm_client,
+) -> tuple[dict, dict]:
+    """Run Judge for both speakers (if eligible). Returns (p_output_dict, c_output_dict)
+    suitable for writing to turn yaml's judge_output_protagonist / _counterpart.
+
+    Updates state.judge_state_protagonist and state.judge_state_counterpart
+    in place via apply_stage_target.
+    """
+    recent = _format_recent_turns(state.turns, n=3)
+    outputs: dict[str, dict] = {}
+
+    for role, persona, attr in (
+        ("protagonist", state.protagonist, "judge_state_protagonist"),
+        ("counterpart", state.counterpart, "judge_state_counterpart"),
+    ):
+        last = getattr(state, attr)
+        if not _should_run_judge(persona):
+            outputs[role] = {"skipped": True, "reason": "no_v3_config"}
+            continue
+        jr = run_judge(
+            last_state=last,
+            principles_text=persona.judge_principles_text,
+            stage_mode_contexts_text=_stage_mode_contexts_text(persona),
+            recent_turns_text=recent,
+            speaker_role=role,
+            persona_name=persona.name,
+            llm_client=llm_client,
+        )
+        new_state, move = apply_stage_target(
+            last_state=last,
+            proposed_stage=jr.proposed_stage,
+            proposed_mode=jr.proposed_mode,
+            proposed_verdict=jr.proposed_verdict,
+            why=jr.why,
+            hits=jr.hits,
+        )
+        setattr(state, attr, new_state)
+        outputs[role] = {
+            "proposed": {
+                "stage": jr.proposed_stage,
+                "mode": jr.proposed_mode,
+                "verdict": jr.proposed_verdict,
+                "why": jr.why,
+            },
+            "applied": {
+                "stage": new_state.stage,
+                "mode": new_state.mode,
+                "move": move,
+            },
+            "hits": list(jr.hits),
+            "meta": dict(jr.meta),
+        }
+    return outputs["protagonist"], outputs["counterpart"]
 
 
 def _append_session_ledgers(

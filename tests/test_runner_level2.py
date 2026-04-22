@@ -71,6 +71,9 @@ def _base_config(max_turns: int = 4) -> ExperimentConfig:
     )
 
 
+_JS = "STAGE: 前置積累\nMODE: 在\nWHY: -\nVERDICT: N/A\nHITS: -\n"
+
+
 def test_first_session_empty_ledgers_written_after(redirect_all_dirs):
     """第一場帳本空；session 結束後 raw + refined 帳本都被建立。"""
     config = _base_config(max_turns=2)
@@ -78,7 +81,9 @@ def test_first_session_empty_ledgers_written_after(redirect_all_dirs):
         "- 醫院\n- 父親\n",
         "- 醫院\n- 父親\n",
         "話一\n\n---IMPRESSIONS---\n- text: \"母親印象一\"\n  symbols: [A, B]\n",
+        _JS, _JS,  # Judge for both after turn 1
         "話二\n\n---IMPRESSIONS---\n- text: \"兒子印象一\"\n  symbols: [C, D]\n",
+        _JS, _JS,  # Judge for both after turn 2
         # Composer with actual drafts to verify refined creation
         "母親:\n  - text: \"母親精煉\"\n    symbols: [A]\n    source_raw_ids: [imp_001]\n\n兒子:\n  - text: \"兒子精煉\"\n    symbols: [C]\n    source_raw_ids: [imp_001]\n",
     ]
@@ -117,7 +122,9 @@ def test_second_session_retrieval_hits_first_session_impressions(redirect_all_di
         "- 醫院\n",
         "- 醫院\n",
         "話一\n\n---IMPRESSIONS---\n- text: \"母親印象\"\n  symbols: [醫院, 父親]\n",
+        _JS, _JS,  # Judge for both after turn 1
         "話二\n\n---IMPRESSIONS---\n- text: \"兒子印象\"\n  symbols: [醫院, 父親]\n",
+        _JS, _JS,  # Judge for both after turn 2
         # Composer produces refined with 醫院 symbol (matches session 2 query)
         "母親:\n  - text: \"醫院走廊長\"\n    symbols: [醫院]\n    source_raw_ids: [imp_001]\n\n兒子:\n  - text: \"父親的門\"\n    symbols: [父親]\n    source_raw_ids: [imp_001]\n",
     ]
@@ -128,7 +135,9 @@ def test_second_session_retrieval_hits_first_session_impressions(redirect_all_di
         "- 醫院\n- 父親\n",
         "- 醫院\n- 父親\n",
         "話三",
+        _JS, _JS,  # Judge for both after turn 3
         "話四",
+        _JS, _JS,  # Judge for both after turn 4
         "母親: []\n兒子: []\n",   # composer noop
     ]
     client = MockLLMClient(responses_2)
@@ -158,12 +167,19 @@ def test_llm_exception_aborts_session_no_ledger_written(redirect_all_dirs):
             self.count = 0
         def generate(self, *, system, user, model="gemini-2.5-flash"):
             self.count += 1
-            # Let the 2 extract calls + 2 turns succeed, blow up on turn 3 (call 5)
-            if self.count == 5:
+            # Let the 2 extract calls + 2 dialogue turns + 4 judge calls succeed,
+            # blow up on turn 3 dialogue (call 9)
+            if self.count == 9:
                 raise RuntimeError("boom")
             if self.count <= 2:
                 return GeminiResponse(
                     content="- X\n", raw=None,
+                    tokens_in=10, tokens_out=5, model=model, latency_ms=10,
+                )
+            # Judge calls return valid stay responses
+            if "隱性量測者" in system:
+                return GeminiResponse(
+                    content=_JS, raw=None,
                     tokens_in=10, tokens_out=5, model=model, latency_ms=10,
                 )
             return GeminiResponse(
@@ -204,7 +220,9 @@ def test_pre_seeded_ledger_hits_system_prompt(redirect_all_dirs):
         "- 手\n- 不動\n",
         "- 手\n- 不動\n",
         "話一",
+        _JS, _JS,  # Judge for both after turn 1
         "話二",
+        _JS, _JS,  # Judge for both after turn 2
         "母親: []\n兒子: []\n",   # composer
     ]
     client = MockLLMClient(responses)
@@ -251,7 +269,9 @@ def test_synonym_map_enables_variant_matching(redirect_all_dirs, tmp_path, monke
         "- 愧疚\n",
         "- 愧疚\n",
         "話一",
+        _JS, _JS,  # Judge for both after turn 1
         "話二",
+        _JS, _JS,  # Judge for both after turn 2
         "母親: []\n兒子: []\n",   # composer
     ]
     client = MockLLMClient(responses)

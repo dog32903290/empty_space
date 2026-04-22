@@ -60,9 +60,19 @@ if TYPE_CHECKING:
     from empty_space.schemas import Turn
 
 
-def append_turn(out_dir: Path, turn: "Turn") -> None:
+def append_turn(
+    out_dir: Path,
+    turn: "Turn",
+    *,
+    judge_output_protagonist: dict | None = None,
+    judge_output_counterpart: dict | None = None,
+    director_injection: dict | None = None,
+) -> None:
     """Write turn_NNN.yaml atomically; append director_event marker (if new) and
     turn entry to conversation.md + conversation.jsonl.
+
+    Level 4: judge_output_{protagonist,counterpart} and director_injection are
+    accepted but not yet persisted — Task 10 wires them into the yaml dict.
     """
     turn_file = out_dir / "turns" / f"turn_{turn.turn_number:03d}.yaml"
     _atomic_write_yaml(turn_file, _turn_to_yaml_dict(turn))
