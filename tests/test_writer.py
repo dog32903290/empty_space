@@ -474,3 +474,84 @@ def test_write_meta_composer_fields_default_to_zero():
                  "protagonist_refined_added", "counterpart_refined_added", "composer_parse_error"]:
         assert name in sig.parameters, f"{name} missing from write_meta signature"
         assert sig.parameters[name].default is not inspect.Parameter.empty, f"{name} has no default"
+
+
+# --- Level 4 helpers ---
+
+from datetime import datetime, timezone
+
+
+def _mk_minimal_config():
+    return ExperimentConfig(
+        exp_id="writer_test",
+        protagonist=PersonaRef(path="x", version="v3_tension"),
+        counterpart=PersonaRef(path="y", version="v3_tension"),
+        setting=SettingRef(path="z.yaml"),
+        scene_premise="test",
+        initial_state=InitialState(verb="承受", stage="前置積累", mode="在"),
+        max_turns=2,
+        termination=Termination(),
+    )
+
+
+def _mk_turn(turn_number: int, speaker: str, persona_name: str) -> Turn:
+    return Turn(
+        turn_number=turn_number,
+        speaker=speaker,  # type: ignore[arg-type]
+        persona_name=persona_name,
+        content="content",
+        candidate_impressions=[],
+        prompt_system="sys",
+        prompt_user="usr",
+        raw_response="content",
+        tokens_in=10, tokens_out=5,
+        model="gemini-2.5-flash",
+        latency_ms=10,
+        timestamp=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        director_events_active=[],
+    )
+
+
+def test_append_turn_writes_judge_outputs(tmp_path):
+    """append_turn should persist judge_output_protagonist/counterpart in turn yaml."""
+    cfg = _mk_minimal_config()
+    out_dir = tmp_path / "run1"
+    init_run(out_dir, cfg)
+
+    turn = _mk_turn(turn_number=1, speaker="protagonist", persona_name="母親")
+    jop = {
+        "proposed": {"stage": "初感訊號", "mode": "收", "verdict": "N/A", "why": "x"},
+        "applied":  {"stage": "初感訊號", "mode": "收", "move": "advance"},
+        "hits": ["line1"],
+        "meta": {"tokens_in": 100, "tokens_out": 30, "model": "gemini-2.5-flash",
+                 "latency_ms": 80, "parse_status": "ok"},
+    }
+    joc = {"skipped": True, "reason": "no_v3_config"}
+
+    append_turn(out_dir, turn, judge_output_protagonist=jop, judge_output_counterpart=joc)
+
+    import yaml
+    data = yaml.safe_load((out_dir / "turns" / "turn_001.yaml").read_text(encoding="utf-8"))
+    assert data["judge_output_protagonist"]["applied"]["move"] == "advance"
+    assert data["judge_output_counterpart"]["skipped"] is True
+
+
+def test_append_turn_writes_director_injection_when_provided(tmp_path):
+    cfg = _mk_minimal_config()
+    out_dir = tmp_path / "run2"
+    init_run(out_dir, cfg)
+    turn = _mk_turn(turn_number=1, speaker="protagonist", persona_name="母親")
+    injection = {
+        "event": "護士開門",
+        "triggered_by": "fire_release on protagonist",
+        "applied_to_turn": 2,
+    }
+    append_turn(
+        out_dir, turn,
+        judge_output_protagonist={"skipped": True, "reason": "none"},
+        judge_output_counterpart={"skipped": True, "reason": "none"},
+        director_injection=injection,
+    )
+    import yaml
+    data = yaml.safe_load((out_dir / "turns" / "turn_001.yaml").read_text(encoding="utf-8"))
+    assert data["director_injection"]["event"] == "護士開門"

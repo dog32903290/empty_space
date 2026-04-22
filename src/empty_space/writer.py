@@ -71,11 +71,19 @@ def append_turn(
     """Write turn_NNN.yaml atomically; append director_event marker (if new) and
     turn entry to conversation.md + conversation.jsonl.
 
-    Level 4: judge_output_{protagonist,counterpart} and director_injection are
-    accepted but not yet persisted — Task 10 wires them into the yaml dict.
+    judge_output_{protagonist,counterpart} and director_injection are embedded
+    in the turn yaml when provided.
     """
     turn_file = out_dir / "turns" / f"turn_{turn.turn_number:03d}.yaml"
-    _atomic_write_yaml(turn_file, _turn_to_yaml_dict(turn))
+    _atomic_write_yaml(
+        turn_file,
+        _turn_to_yaml_dict(
+            turn,
+            judge_output_protagonist=judge_output_protagonist,
+            judge_output_counterpart=judge_output_counterpart,
+            director_injection=director_injection,
+        ),
+    )
 
     new_event = _new_event_this_turn(turn)
     _append_conversation_md(out_dir, turn, new_event)
@@ -94,8 +102,14 @@ def _new_event_this_turn(turn: "Turn") -> tuple[int, str] | None:
     return None
 
 
-def _turn_to_yaml_dict(turn: "Turn") -> dict:
-    return {
+def _turn_to_yaml_dict(
+    turn: "Turn",
+    *,
+    judge_output_protagonist: dict | None = None,
+    judge_output_counterpart: dict | None = None,
+    director_injection: dict | None = None,
+) -> dict:
+    d = {
         "turn": turn.turn_number,
         "speaker": turn.speaker,
         "persona_name": turn.persona_name,
@@ -103,7 +117,7 @@ def _turn_to_yaml_dict(turn: "Turn") -> dict:
         "prompt_assembled": {
             "system": turn.prompt_system,
             "user": turn.prompt_user,
-            "prompt_tokens": turn.tokens_in,  # total prompt tokens reported by API
+            "prompt_tokens": turn.tokens_in,
         },
         "response": {
             "content": turn.content,
@@ -135,6 +149,13 @@ def _turn_to_yaml_dict(turn: "Turn") -> dict:
             for imp in turn.retrieved_impressions
         ],
     }
+    if judge_output_protagonist is not None:
+        d["judge_output_protagonist"] = judge_output_protagonist
+    if judge_output_counterpart is not None:
+        d["judge_output_counterpart"] = judge_output_counterpart
+    if director_injection is not None:
+        d["director_injection"] = director_injection
+    return d
 
 
 def _append_conversation_md(
