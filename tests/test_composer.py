@@ -462,3 +462,42 @@ def test_run_composer_partial_success_only_protagonist(tmp_path, monkeypatch):
     c_path = tmp_path / "ledgers" / "R.refined.from_兒子.yaml"
     assert p_path.exists()
     assert not c_path.exists()  # empty drafts → no file created (per append_refined_impressions)
+
+
+def test_parse_strips_yaml_code_fence():
+    """Pro often wraps output in ```yaml ... ``` fence."""
+    raw = """```yaml
+母親:
+  - text: "被 fence 包住的輸出"
+    symbols: [a]
+    source_raw_ids: []
+```"""
+    p_drafts, c_drafts, err = parse_composer_output(raw, protagonist_name="母親", counterpart_name="兒子")
+    assert err is None
+    assert len(p_drafts) == 1
+    assert p_drafts[0].text == "被 fence 包住的輸出"
+
+
+def test_parse_strips_plain_code_fence():
+    """Fence without language tag."""
+    raw = """```
+母親:
+  - text: "無 lang tag"
+    symbols: [a]
+    source_raw_ids: []
+```"""
+    p_drafts, _, err = parse_composer_output(raw, protagonist_name="母親", counterpart_name="兒子")
+    assert err is None
+    assert p_drafts[0].text == "無 lang tag"
+
+
+def test_parse_no_fence_unchanged():
+    """Without fence, parsing should work as before."""
+    raw = """母親:
+  - text: "no fence"
+    symbols: [a]
+    source_raw_ids: []
+"""
+    p_drafts, _, err = parse_composer_output(raw, protagonist_name="母親", counterpart_name="兒子")
+    assert err is None
+    assert p_drafts[0].text == "no fence"

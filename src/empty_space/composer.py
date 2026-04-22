@@ -37,8 +37,10 @@ def parse_composer_output(
     - `symbols` missing → default [].
     - `source_raw_ids` missing → default [].
     """
+    # Strip markdown code fence that Pro often adds
+    cleaned = _strip_code_fence(raw_yaml)
     try:
-        parsed = yaml.safe_load(raw_yaml)
+        parsed = yaml.safe_load(cleaned)
     except yaml.YAMLError as e:
         return [], [], f"YAML parse error: {e}"
 
@@ -53,6 +55,27 @@ def parse_composer_output(
     c_drafts = _parse_section(c_section) if c_section is not None else []
 
     return p_drafts, c_drafts, None
+
+
+def _strip_code_fence(text: str) -> str:
+    """Strip leading/trailing markdown code fence if present.
+
+    Handles variants:
+    - ``` ... ```
+    - ```yaml ... ```
+    - ```YAML ... ```
+    - leading/trailing whitespace around fence
+    """
+    s = text.strip()
+    if not s.startswith("```"):
+        return text
+    lines = s.split("\n")
+    # Remove first fence line
+    lines = lines[1:]
+    # Remove trailing fence line if present
+    if lines and lines[-1].strip().startswith("```"):
+        lines = lines[:-1]
+    return "\n".join(lines)
 
 
 def _find_section(parsed: dict, name: str):
