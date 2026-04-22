@@ -8,9 +8,6 @@ Design:
 """
 from __future__ import annotations
 
-from empty_space.schemas import JudgeResult, JudgeState  # noqa: F401
-
-
 STAGE_ORDER: list[str] = [
     "前置積累",
     "初感訊號",
@@ -56,7 +53,7 @@ def parse_stage_mode_contexts(raw: dict | None) -> dict[str, dict[str, str]]:
     if not raw:
         return {}
     result: dict[str, dict[str, str]] = {}
-    expected_inner = {"身體", "語言形態", "張力狀態", "碎裂密度"}
+    expected_inner = {"身體", "語言形態", "張力狀態"}
     for key, val in raw.items():
         if not isinstance(val, dict):
             continue

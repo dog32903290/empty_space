@@ -43,6 +43,8 @@ def test_parse_stage_mode_contexts_extracts_cells():
     assert parsed["前置積累_收"]["身體傾向"] == "鯨的下潛"
     assert parsed["前置積累_收"]["語聲傾向"] == "極短"
     assert parsed["前置積累_收"]["注意力"] == "拉力 > 推力"
+    assert parsed["前置積累_在"]["身體傾向"] == "鯨的巡游"
+    assert parsed["前置積累_在"]["語聲傾向"] == "極少"
     assert parsed["前置積累_在"]["注意力"] == ""  # 張力狀態 missing → empty
 
 
