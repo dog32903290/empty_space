@@ -4,9 +4,15 @@ import pytest
 from empty_space.judge import (
     MODES,
     STAGE_ORDER,
+    apply_stage_target,
     parse_judge_principles,
     parse_stage_mode_contexts,
 )
+from empty_space.schemas import JudgeState
+
+
+def _state(stage="前置積累", mode="在") -> JudgeState:
+    return JudgeState(speaker_role="protagonist", stage=stage, mode=mode)
 
 
 def test_stage_order_length_and_first_last():
@@ -61,3 +67,113 @@ def test_parse_stage_mode_contexts_ignores_non_cell_keys():
 def test_parse_stage_mode_contexts_empty_input():
     assert parse_stage_mode_contexts({}) == {}
     assert parse_stage_mode_contexts(None) == {}
+
+
+def test_apply_stay():
+    last = _state(stage="前置積累", mode="在")
+    new, move = apply_stage_target(
+        last_state=last, proposed_stage="前置積累",
+        proposed_mode="在", proposed_verdict="N/A",
+    )
+    assert new.stage == "前置積累"
+    assert move == "stay"
+
+
+def test_apply_advance():
+    last = _state(stage="前置積累", mode="在")
+    new, move = apply_stage_target(
+        last_state=last, proposed_stage="初感訊號",
+        proposed_mode="收", proposed_verdict="N/A",
+    )
+    assert new.stage == "初感訊號"
+    assert new.mode == "收"
+    assert move == "advance"
+
+
+def test_apply_regress():
+    last = _state(stage="初感訊號", mode="收")
+    new, move = apply_stage_target(
+        last_state=last, proposed_stage="前置積累",
+        proposed_mode="在", proposed_verdict="N/A",
+    )
+    assert new.stage == "前置積累"
+    assert move == "regress"
+
+
+def test_apply_illegal_jump_forces_stay():
+    last = _state(stage="前置積累", mode="在")
+    new, move = apply_stage_target(
+        last_state=last, proposed_stage="明確切換",   # +3 jump, no fire_release
+        proposed_mode="放", proposed_verdict="N/A",
+    )
+    assert new.stage == "前置積累"
+    assert move == "illegal_stay"
+
+
+def test_apply_fire_release_allows_plus_two():
+    last = _state(stage="前置積累", mode="在")
+    new, move = apply_stage_target(
+        last_state=last, proposed_stage="半意識浮現",   # +2
+        proposed_mode="放", proposed_verdict="fire_release",
+    )
+    assert new.stage == "半意識浮現"
+    assert move == "fire_advance"
+
+
+def test_apply_fire_release_does_not_allow_plus_three():
+    last = _state(stage="前置積累", mode="在")
+    new, move = apply_stage_target(
+        last_state=last, proposed_stage="明確切換",   # +3 even under fire
+        proposed_mode="放", proposed_verdict="fire_release",
+    )
+    assert new.stage == "前置積累"
+    assert move == "illegal_stay"
+
+
+def test_apply_basin_lock_forces_stay():
+    last = _state(stage="穩定期", mode="在")
+    new, move = apply_stage_target(
+        last_state=last, proposed_stage="前置積累",   # Judge tried regress
+        proposed_mode="收", proposed_verdict="basin_lock",
+    )
+    assert new.stage == "穩定期"
+    assert move == "basin_stay"
+
+
+def test_apply_mode_fallback_when_unknown():
+    last = _state(stage="前置積累", mode="在")
+    new, _ = apply_stage_target(
+        last_state=last, proposed_stage="前置積累",
+        proposed_mode="壓抑",   # not in MODES
+        proposed_verdict="N/A",
+    )
+    assert new.mode == "在"   # fallback to last
+
+
+def test_apply_mode_free_switch_within_legal():
+    last = _state(stage="前置積累", mode="在")
+    new, _ = apply_stage_target(
+        last_state=last, proposed_stage="前置積累",
+        proposed_mode="放", proposed_verdict="N/A",
+    )
+    assert new.mode == "放"
+
+
+def test_apply_unknown_stage_name_forces_stay():
+    last = _state(stage="前置積累", mode="在")
+    new, move = apply_stage_target(
+        last_state=last, proposed_stage="緩和期",   # not in STAGE_ORDER
+        proposed_mode="收", proposed_verdict="N/A",
+    )
+    assert new.stage == "前置積累"
+    assert move == "illegal_stay"
+
+
+def test_apply_appends_move_history():
+    last = _state()
+    last.move_history = ["stay", "advance"]
+    new, _ = apply_stage_target(
+        last_state=last, proposed_stage="前置積累",
+        proposed_mode="在", proposed_verdict="N/A",
+    )
+    assert new.move_history == ["stay", "advance", "stay"]
