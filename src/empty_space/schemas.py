@@ -245,7 +245,7 @@ class ComposerSessionResult:
 
 @dataclass
 class JudgeState:
-    """Per-speaker (stage, mode) state, updated after each turn by Judge.
+    """Per-speaker (stage, mode, verb) state, updated after each turn by Judge.
 
     move_history / verdict_history / hits_history accumulate per turn for
     termination checks and post-session analysis.
@@ -253,6 +253,7 @@ class JudgeState:
     speaker_role: Literal["protagonist", "counterpart"]
     stage: str
     mode: str
+    current_verb: str = ""
     last_why: str = ""
     last_verdict: str = ""
     move_history: list[str] = field(default_factory=list)
@@ -269,10 +270,11 @@ class JudgeResult:
     """
     proposed_stage: str
     proposed_mode: str
-    proposed_verdict: str  # "fire_release" | "basin_lock" | "N/A"
-    why: str
-    hits: list[str]
-    meta: dict  # tokens_in, tokens_out, latency_ms, model, parse_status, error?
+    proposed_verb: str = ""
+    proposed_verdict: str = "N/A"  # "fire_release" | "basin_lock" | "N/A"
+    why: str = ""
+    hits: list[str] = field(default_factory=list)
+    meta: dict = field(default_factory=dict)  # tokens_in, tokens_out, latency_ms, model, parse_status, error?
 
 
 @dataclass

@@ -113,8 +113,10 @@ def _build_此刻_block(
     cell_key = f"{judge_state.stage}_{judge_state.mode}"
     cell = (stage_mode_contexts or {}).get(cell_key)
 
-    lines = [
-        "## 此刻",
+    lines = ["## 此刻"]
+    if judge_state.current_verb:
+        lines.append(f"動作詞：{judge_state.current_verb}")
+    lines += [
         f"階段：{judge_state.stage}",
         f"模式：{judge_state.mode}",
     ]

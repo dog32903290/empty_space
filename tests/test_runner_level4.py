@@ -143,6 +143,62 @@ def test_judge_state_evolves_across_turns():
     assert "模式：收" in turn_3["prompt_assembled"]["system"]
 
 
+def test_judge_verb_evolves_across_turns():
+    """Judge can shift current_verb turn-by-turn; this appears in 此刻 block + trajectories."""
+    # protagonist 承受（靠近）→ 承受（等待）→ 承受（退回）
+    responses = [
+        "- 醫院\n", "- 醫院\n",
+        # turn 1 protagonist
+        "話1",
+        "STAGE: 初感訊號\nMODE: 收\nVERB: 承受（等待）\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 拒絕\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        # turn 2 counterpart
+        "話2",
+        "STAGE: 初感訊號\nMODE: 收\nVERB: 承受（退回）\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 拒絕\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        # turn 3 protagonist
+        "話3",
+        "STAGE: 初感訊號\nMODE: 收\nVERB: 承受（退回）\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 拒絕\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=3)
+    client = MockLLMClient(responses)
+    result = run_session(config=config, llm_client=client)
+
+    # Turn 3 is protagonist's 2nd turn — 此刻 block should show latest 承受（退回）
+    turn_3 = yaml.safe_load(
+        (result.out_dir / "turns" / "turn_003.yaml").read_text(encoding="utf-8")
+    )
+    assert "動作詞：承受（退回）" in turn_3["prompt_assembled"]["system"]
+
+    # judge_trajectories should track verb evolution
+    meta = yaml.safe_load((result.out_dir / "meta.yaml").read_text(encoding="utf-8"))
+    p_verbs = meta["judge_trajectories"]["protagonist"]["verbs"]
+    assert p_verbs == ["承受（等待）", "承受（退回）", "承受（退回）"]
+    c_verbs = meta["judge_trajectories"]["counterpart"]["verbs"]
+    assert c_verbs == ["拒絕", "拒絕", "拒絕"]
+
+
+def test_judge_verb_falls_back_when_missing_from_output():
+    """If Judge output omits VERB line, current_verb preserved from last_state."""
+    responses = [
+        "- 醫院\n", "- 醫院\n",
+        "話1",
+        # No VERB line — should inherit from initial_state.verb = 承受
+        "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=1)
+    client = MockLLMClient(responses)
+    result = run_session(config=config, llm_client=client)
+
+    meta = yaml.safe_load((result.out_dir / "meta.yaml").read_text(encoding="utf-8"))
+    # verb should inherit initial_state.verb="承受" (from _base_config)
+    assert meta["judge_trajectories"]["protagonist"]["verbs"] == ["承受"]
+
+
 def test_judge_skipped_when_persona_lacks_v3(monkeypatch):
     """Persona without v3 files — Judge skipped; state unchanged; no Judge calls."""
     import empty_space.runner as runner_mod

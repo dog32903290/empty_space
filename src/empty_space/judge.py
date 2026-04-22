@@ -43,6 +43,7 @@ def apply_stage_target(
     proposed_stage: str,
     proposed_mode: str,
     proposed_verdict: str,
+    proposed_verb: str = "",
     why: str = "",
     hits: list[str] | None = None,
 ) -> tuple[JudgeState, str]:
@@ -67,7 +68,7 @@ def apply_stage_target(
         move = "illegal_stay"
         return _build_new_state(
             last_state, new_idx, proposed_mode,
-            proposed_verdict, why, hits, move,
+            proposed_verdict, proposed_verb, why, hits, move,
         ), move
 
     # 2. basin_lock overrides — force stay
@@ -76,7 +77,7 @@ def apply_stage_target(
         move = "basin_stay"
         return _build_new_state(
             last_state, new_idx, proposed_mode,
-            proposed_verdict, why, hits, move,
+            proposed_verdict, proposed_verb, why, hits, move,
         ), move
 
     # 3. fire_release exception — allow +2 jump (but not +3 or more)
@@ -84,7 +85,7 @@ def apply_stage_target(
         move = "fire_advance"
         return _build_new_state(
             last_state, new_idx, proposed_mode,
-            proposed_verdict, why, hits, move,
+            proposed_verdict, proposed_verb, why, hits, move,
         ), move
 
     # 4. Normal ratchet: only -1, 0, +1 allowed
@@ -101,7 +102,7 @@ def apply_stage_target(
 
     return _build_new_state(
         last_state, new_idx, proposed_mode,
-        proposed_verdict, why, hits, move,
+        proposed_verdict, proposed_verb, why, hits, move,
     ), move
 
 
@@ -110,17 +111,20 @@ def _build_new_state(
     new_stage_idx: int,
     proposed_mode: str,
     verdict: str,
+    proposed_verb: str,
     why: str,
     hits: list[str] | None,
     move: str,
 ) -> JudgeState:
-    """Construct the new JudgeState with mode fallback + history appends."""
+    """Construct the new JudgeState with mode/verb fallback + history appends."""
     new_mode = proposed_mode if proposed_mode in MODES else last_state.mode
+    new_verb = proposed_verb or last_state.current_verb
     new_hits = list(hits) if hits else []
     return JudgeState(
         speaker_role=last_state.speaker_role,
         stage=STAGE_ORDER[new_stage_idx],
         mode=new_mode,
+        current_verb=new_verb,
         last_why=why,
         last_verdict=verdict,
         move_history=last_state.move_history + [move],
@@ -135,11 +139,12 @@ _VERDICT_VALUES = {"fire_release", "basin_lock", "N/A"}
 
 
 def parse_judge_output(text: str, *, last_state: JudgeState) -> JudgeResult:
-    """Parse Flash's 5-line output tolerantly.
+    """Parse Flash's 6-line output tolerantly.
 
     Expected format:
         STAGE: <stage 名>
         MODE: <mode 名>
+        VERB: <動詞>
         WHY: <一句>
         VERDICT: <fire_release | basin_lock | N/A>
         HITS: <line1; line2; line3>
@@ -150,8 +155,9 @@ def parse_judge_output(text: str, *, last_state: JudgeState) -> JudgeResult:
     - Stage/mode name substring/superstring of a canonical name → fuzzy match
     - Missing field → fallback to last_state (and mark parse_status)
     - Completely unparseable → fallback_used for all fields
+    - VERB missing → silently falls back to last_state.current_verb (does not affect parse_status)
     - parse_status values:
-        "ok": all three critical fields (STAGE/MODE/VERDICT) extracted (WHY/HITS don't affect status)
+        "ok": all three critical fields (STAGE/MODE/VERDICT) extracted (WHY/HITS/VERB don't affect status)
         "partial": at least one critical field missing but some found
         "fallback_used": no fields parsed at all
     """
@@ -159,6 +165,7 @@ def parse_judge_output(text: str, *, last_state: JudgeState) -> JudgeResult:
 
     raw_stage = _extract_field(lines, ["STAGE:", "STAGE：", "階段:", "階段："])
     raw_mode = _extract_field(lines, ["MODE:", "MODE：", "模式:", "模式："])
+    raw_verb = _extract_field(lines, ["VERB:", "VERB：", "動詞:", "動詞："])
     raw_verdict = _extract_field(lines, ["VERDICT:", "VERDICT："])
     raw_why = _extract_field(lines, ["WHY:", "WHY：", "為什麼:", "為什麼："])
     raw_hits = _extract_field(lines, ["HITS:", "HITS："])
@@ -168,17 +175,20 @@ def parse_judge_output(text: str, *, last_state: JudgeState) -> JudgeResult:
 
     stage = _normalise_stage(raw_stage or "", last_state.stage)
     mode = _normalise_mode(raw_mode or "", last_state.mode)
+    # VERB: use extracted value if present, else fall back to last_state.current_verb
+    verb = (raw_verb or "").strip() or last_state.current_verb
     verdict = _normalise_verdict(raw_verdict or "")
     why = (raw_why or "").strip()
     hits = _parse_hits(raw_hits or "")
 
-    # If we got some fields but not all, mark partial
+    # If we got some fields but not all critical ones, mark partial
     if found_any and (raw_stage is None or raw_mode is None or raw_verdict is None):
         parse_status = "partial"
 
     return JudgeResult(
         proposed_stage=stage,
         proposed_mode=mode,
+        proposed_verb=verb,
         proposed_verdict=verdict,
         why=why,
         hits=hits,
@@ -249,7 +259,7 @@ def _parse_hits(raw: str) -> list[str]:
 _JUDGE_SYSTEM_PROMPT = """\
 你是戲劇裡的「隱性量測者」。你不介入對話、不評分、不給建議。
 你只做一件事：根據這個角色最近說的話、做的動作、身體狀態，
-判斷他在 stage × mode 二維空間裡「下一刻」會落在哪一格。
+判斷他在 stage × mode × verb 三維空間裡「下一刻」會落在哪一格。
 
 規則：
 - STAGE 只能沿序列相鄰移動：前置積累 → 初感訊號 → 半意識浮現 → 明確切換 → 穩定期 → 回溫期 → 基線
@@ -259,6 +269,11 @@ _JUDGE_SYSTEM_PROMPT = """\
   - 收：往內收斂、壓住、沉默、身體變小
   - 放：往外釋放、爆發、哭、笑、吼
   - 在：既不收也不放，只是存在、觀察、呼吸
+- VERB 是角色此刻實際在做什麼的動詞（不是他此刻的狀態位置，是他此刻的意圖）：
+  - 動詞通常是 persona 情緒動詞主軸的場景化變形（例：「承受」→「承受（靠近）」「承受（退回）」「承受（等待）」）
+  - 如果你判斷角色此刻的意圖沒變，重複上一輪的 VERB
+  - 如果角色的意圖變了（例如從靠近轉為退回、從承受轉為逃避），用新的動詞
+  - 優先用 persona 的情緒動詞主軸 + 場景化修飾，不要自由發揮成無關的動詞
 - VERDICT 標記特殊事件：
   - **若 persona 原則裡有 verdict_calibration 區塊，以該區塊的 signature / counterexamples 為最高準則**，而不是你的通用直覺。每個角色的 fire_release / basin_lock 門檻是他個性的一環，不要套絕對標準。
   - fire_release：對這個角色的個人尺度上剛剛發生了質變的情緒釋放
@@ -266,9 +281,10 @@ _JUDGE_SYSTEM_PROMPT = """\
   - N/A：其他情況
 - HITS 是你觀察到的具體線索
 
-輸出格式（5 行，嚴格）：
+輸出格式（6 行，嚴格）：
 STAGE: <stage 名>
 MODE: <mode 名>
+VERB: <動詞>
 WHY: <一句話>
 VERDICT: <fire_release | basin_lock | N/A>
 HITS: <line1; line2; line3>
@@ -295,6 +311,7 @@ def build_judge_prompt(
 # 上一輪狀態
 STAGE: {last_state.stage}
 MODE: {last_state.mode}
+VERB: {last_state.current_verb}
 LAST_WHY: {last_state.last_why}
 
 # 最近對話（最多 3 輪）
@@ -302,7 +319,7 @@ LAST_WHY: {last_state.last_why}
 
 # 任務
 根據以上，只判斷 {speaker_role}（{persona_name}）這個角色，
-輸出他「剛說完這輪話之後」的 stage/mode/why/verdict/hits。
+輸出他「剛說完這輪話之後」的 stage/mode/verb/why/verdict/hits。
 """
     return _JUDGE_SYSTEM_PROMPT, user
 
@@ -337,6 +354,7 @@ def run_judge(
         return JudgeResult(
             proposed_stage=last_state.stage,
             proposed_mode=last_state.mode,
+            proposed_verb=last_state.current_verb,
             proposed_verdict="N/A",
             why=f"[judge_error] {type(e).__name__}",
             hits=[],

@@ -70,10 +70,10 @@ class SessionState:
     director_injections: list[dict] = field(default_factory=list)
     # Bookkeeping for meta.yaml aggregation:
     judge_history_protagonist: dict = field(
-        default_factory=lambda: {"stages": [], "modes": []}
+        default_factory=lambda: {"stages": [], "modes": [], "verbs": []}
     )
     judge_history_counterpart: dict = field(
-        default_factory=lambda: {"stages": [], "modes": []}
+        default_factory=lambda: {"stages": [], "modes": [], "verbs": []}
     )
     judge_health_events: dict = field(
         default_factory=lambda: {"protagonist": [], "counterpart": []}
@@ -389,6 +389,7 @@ def _init_judge_state(
         speaker_role=speaker_role,  # type: ignore[arg-type]
         stage=initial_state.stage,
         mode=initial_state.mode,
+        current_verb=initial_state.verb,
         last_why="",
         last_verdict="",
         move_history=[],
@@ -447,9 +448,10 @@ def _run_judges_post_turn(
         last = getattr(state, attr)
         if not _should_run_judge(persona):
             outputs[role] = {"skipped": True, "reason": "no_v3_config"}
-            # Track stage/mode unchanged for trajectory length consistency
+            # Track stage/mode/verb unchanged for trajectory length consistency
             getattr(state, hist_attr)["stages"].append(last.stage)
             getattr(state, hist_attr)["modes"].append(last.mode)
+            getattr(state, hist_attr)["verbs"].append(last.current_verb)
             state.judge_health_events[role].append({"parse_status": "no_judge"})
             continue
         jr = run_judge(
@@ -466,23 +468,27 @@ def _run_judges_post_turn(
             proposed_stage=jr.proposed_stage,
             proposed_mode=jr.proposed_mode,
             proposed_verdict=jr.proposed_verdict,
+            proposed_verb=jr.proposed_verb,
             why=jr.why,
             hits=jr.hits,
         )
         setattr(state, attr, new_state)
         getattr(state, hist_attr)["stages"].append(new_state.stage)
         getattr(state, hist_attr)["modes"].append(new_state.mode)
+        getattr(state, hist_attr)["verbs"].append(new_state.current_verb)
         state.judge_health_events[role].append({"parse_status": jr.meta.get("parse_status", "ok")})
         outputs[role] = {
             "proposed": {
                 "stage": jr.proposed_stage,
                 "mode": jr.proposed_mode,
+                "verb": jr.proposed_verb,
                 "verdict": jr.proposed_verdict,
                 "why": jr.why,
             },
             "applied": {
                 "stage": new_state.stage,
                 "mode": new_state.mode,
+                "verb": new_state.current_verb,
                 "move": move,
             },
             "hits": list(jr.hits),
@@ -492,17 +498,19 @@ def _run_judges_post_turn(
 
 
 def _build_judge_trajectories(state: "SessionState") -> dict:
-    """Pull per-speaker (stages, modes, moves, verdicts) lists from final state."""
+    """Pull per-speaker (stages, modes, verbs, moves, verdicts) lists from final state."""
     return {
         "protagonist": {
             "stages": list(state.judge_history_protagonist["stages"]),
             "modes": list(state.judge_history_protagonist["modes"]),
+            "verbs": list(state.judge_history_protagonist["verbs"]),
             "moves": list(state.judge_state_protagonist.move_history) if state.judge_state_protagonist else [],
             "verdicts": list(state.judge_state_protagonist.verdict_history) if state.judge_state_protagonist else [],
         },
         "counterpart": {
             "stages": list(state.judge_history_counterpart["stages"]),
             "modes": list(state.judge_history_counterpart["modes"]),
+            "verbs": list(state.judge_history_counterpart["verbs"]),
             "moves": list(state.judge_state_counterpart.move_history) if state.judge_state_counterpart else [],
             "verdicts": list(state.judge_state_counterpart.verdict_history) if state.judge_state_counterpart else [],
         },
