@@ -132,3 +132,93 @@ def test_append_refined_empty_drafts_is_noop():
     assert version == 0
     path = refined_ledger_path(relationship="R", persona_name="母親")
     assert not path.exists()
+
+
+def test_refined_ledger_persists_source_states():
+    """append_refined_impressions writes source_states; read_refined_ledger reads it back."""
+    state_entry = {
+        "turn": 3,
+        "stage": "初感訊號",
+        "mode": "收",
+        "verb": "承受",
+        "verdict": "N/A",
+    }
+    draft = RefinedImpressionDraft(
+        text="她喉嚨緊，話說不出來",
+        symbols=["喉嚨", "緊"],
+        source_raw_ids=["imp_003"],
+        source_states=[state_entry],
+    )
+    append_refined_impressions(
+        relationship="R",
+        speaker_role="protagonist",
+        persona_name="母親",
+        drafts=[draft],
+        source_run="exp/t",
+    )
+
+    ledger = read_refined_ledger(relationship="R", persona_name="母親")
+    assert len(ledger.impressions) == 1
+    imp = ledger.impressions[0]
+    assert len(imp.source_states) == 1
+    ss = imp.source_states[0]
+    assert ss["turn"] == 3
+    assert ss["stage"] == "初感訊號"
+    assert ss["mode"] == "收"
+    assert ss["verb"] == "承受"
+    assert ss["verdict"] == "N/A"
+
+
+def test_refined_ledger_source_states_empty_by_default():
+    """Draft without source_states → impression has empty source_states list."""
+    draft = RefinedImpressionDraft(
+        text="沉默",
+        symbols=["沉默"],
+        source_raw_ids=[],
+        # source_states not provided → defaults to []
+    )
+    append_refined_impressions(
+        relationship="R",
+        speaker_role="protagonist",
+        persona_name="母親",
+        drafts=[draft],
+        source_run="exp/t",
+    )
+
+    ledger = read_refined_ledger(relationship="R", persona_name="母親")
+    assert ledger.impressions[0].source_states == []
+
+
+def test_refined_ledger_source_states_absent_in_yaml_reads_empty():
+    """Older YAML files without source_states key → reads back as empty list."""
+    import yaml as _yaml
+    from empty_space.ledger import refined_ledger_path
+
+    # Write a minimal YAML without source_states (simulating old format)
+    path = refined_ledger_path(relationship="R", persona_name="母親")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = {
+        "relationship": "R",
+        "speaker": "protagonist",
+        "persona_name": "母親",
+        "ledger_version": 1,
+        "impressions": [
+            {
+                "id": "ref_001",
+                "text": "old format",
+                "symbols": ["a"],
+                "speaker": "protagonist",
+                "persona_name": "母親",
+                "from_run": "exp/t",
+                "source_raw_ids": [],
+                "created": "2026-04-21T10:00:00Z",
+                # no source_states key
+            }
+        ],
+        "symbol_index": {},
+        "cooccurrence": {},
+    }
+    path.write_text(_yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+
+    ledger = read_refined_ledger(relationship="R", persona_name="母親")
+    assert ledger.impressions[0].source_states == []

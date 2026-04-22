@@ -485,11 +485,11 @@ def test_second_session_retrieval_reads_refined(minimal_config, tmp_path, monkey
     ]
     run_session(config=minimal_config, llm_client=MockLLMClient(responses_1))
 
-    # Session 2
+    # Session 2 — new order: infer first, then extract
     responses_2 = [
-        "- 醫院\n", "- 父親\n",
-        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
-        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",  # infer_p (now runs before retrieval)
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",  # infer_c
+        "- 醫院\n", "- 父親\n",  # extract_p, extract_c (retrieval runs after infer)
         "e", _JS, _JS,
         "f", _JS, _JS,
         "g", _JS, _JS,

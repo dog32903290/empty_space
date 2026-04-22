@@ -133,7 +133,7 @@ class RetrievedImpression:
     persona_name: str
     from_run: str
     from_turn: int | None
-    score: int                           # len(matched_symbols)
+    score: float                         # symbol match count + optional state-resonance bonus
     matched_symbols: tuple[str, ...]     # canonical 形式的交集
 
 
@@ -205,6 +205,8 @@ class RefinedImpression:
     from_run: str                        # exp_id/timestamp
     source_raw_ids: list[str]            # which raws contributed (best-effort)
     created: str                         # ISO 8601
+    source_states: list[dict] = field(default_factory=list)
+    # Each dict: {"turn": int, "stage": str, "mode": str, "verb": str, "verdict": str}
 
 
 @dataclass
@@ -228,6 +230,8 @@ class RefinedImpressionDraft:
     text: str
     symbols: list[str]
     source_raw_ids: list[str]
+    source_states: list[dict] = field(default_factory=list)
+    # Each dict: {"turn": int, "stage": str, "mode": str, "verb": str, "verdict": str}
 
 
 @dataclass

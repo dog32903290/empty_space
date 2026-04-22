@@ -93,10 +93,26 @@ def run_session(
     out_dir = RUNS_DIR / config.exp_id / timestamp
     init_run(out_dir, config)
 
-    # Level 2: Session-start retrieval (once per role)
     synonym_map = load_synonym_map()
     relationship = f"{protagonist.name}_x_{counterpart.name}"
 
+    # Create SessionState early so _init_judge_state can mutate it
+    state = SessionState(
+        config=config,
+        protagonist=protagonist,
+        counterpart=counterpart,
+        setting=setting,
+    )
+
+    # Level 4: infer initial Judge states BEFORE retrieval so retrieval has current state
+    state.judge_state_protagonist = _init_judge_state(
+        "protagonist", protagonist, counterpart.name, config, llm_client,
+    )
+    state.judge_state_counterpart = _init_judge_state(
+        "counterpart", counterpart, protagonist.name, config, llm_client,
+    )
+
+    # Level 2: Session-start retrieval — NOW with inferred state as current_state
     retrieval_protagonist = run_session_start_retrieval(
         speaker_role="protagonist",
         persona_name=protagonist.name,
@@ -105,6 +121,7 @@ def run_session(
         other_persona_name=counterpart.name,
         synonym_map=synonym_map,
         llm_client=llm_client,
+        current_state=_judge_state_as_dict(state.judge_state_protagonist),
         top_n=3,
     )
     retrieval_counterpart = run_session_start_retrieval(
@@ -115,6 +132,7 @@ def run_session(
         other_persona_name=protagonist.name,
         synonym_map=synonym_map,
         llm_client=llm_client,
+        current_state=_judge_state_as_dict(state.judge_state_counterpart),
         top_n=3,
     )
     write_retrieval(
@@ -123,21 +141,8 @@ def run_session(
         counterpart=retrieval_counterpart,
     )
 
-    state = SessionState(
-        config=config,
-        protagonist=protagonist,
-        counterpart=counterpart,
-        setting=setting,
-        retrieval_protagonist=retrieval_protagonist,
-        retrieval_counterpart=retrieval_counterpart,
-    )
-
-    state.judge_state_protagonist = _init_judge_state(
-        "protagonist", protagonist, counterpart.name, config, llm_client,
-    )
-    state.judge_state_counterpart = _init_judge_state(
-        "counterpart", counterpart, protagonist.name, config, llm_client,
-    )
+    state.retrieval_protagonist = retrieval_protagonist
+    state.retrieval_counterpart = retrieval_counterpart
 
     start_time = time.monotonic()
     events_triggered: list[tuple[int, str]] = []
@@ -271,12 +276,13 @@ def run_session(
 
     # Level 2: Session-end ledger append
     source_run = f"{config.exp_id}/{timestamp}"
-    ledger_appends, new_raw_ids = _append_session_ledgers(
+    ledger_appends, new_raw_ids, state_maps = _append_session_ledgers(
         relationship=relationship,
         protagonist_persona=protagonist,
         counterpart_persona=counterpart,
         turns=state.turns,
         source_run=source_run,
+        state=state,
     )
 
     # Level 3: Composer Pro bake at session end
@@ -289,6 +295,7 @@ def run_session(
         new_raw_ids=new_raw_ids,
         source_run=source_run,
         llm_client=llm_client,
+        state_maps=state_maps,
     )
 
     # Update models_used to include Pro if Composer ran
@@ -356,6 +363,7 @@ def _run_composer_at_session_end(
     new_raw_ids: dict[str, list[str]],
     source_run: str,
     llm_client,
+    state_maps: dict[str, dict[str, dict]] | None = None,
 ) -> ComposerSessionResult:
     """Wrap run_composer — exception-safe. On any error, returns result
     with parse_error set, refined ledgers untouched.
@@ -373,6 +381,7 @@ def _run_composer_at_session_end(
             new_raw_ids=new_raw_ids,
             source_run=source_run,
             llm_client=llm_client,
+            state_maps=state_maps,
         )
     except Exception as e:
         return ComposerSessionResult(
@@ -635,6 +644,52 @@ def _prompt_for_director_event(
     return line if line else None
 
 
+def _judge_state_as_dict(judge_state: "JudgeState | None") -> dict | None:
+    """Convert a JudgeState to a plain dict for current_state kwarg in retrieval."""
+    if judge_state is None:
+        return None
+    return {
+        "stage": judge_state.stage,
+        "mode": judge_state.mode,
+        "verb": judge_state.current_verb,
+    }
+
+
+def _build_state_map_for_speaker(
+    state: "SessionState",
+    speaker_role: str,
+    raw_id_to_turn: dict[str, int],
+) -> dict[str, dict]:
+    """Given raw_id → turn_number, return raw_id → state_dict.
+
+    Looks up the judge history at that turn to get (stage, mode, verb, verdict).
+    """
+    hist = (
+        state.judge_history_protagonist
+        if speaker_role == "protagonist"
+        else state.judge_history_counterpart
+    )
+    judge_state = (
+        state.judge_state_protagonist
+        if speaker_role == "protagonist"
+        else state.judge_state_counterpart
+    )
+    verdicts = judge_state.verdict_history if judge_state else []
+
+    result: dict[str, dict] = {}
+    for raw_id, turn_num in raw_id_to_turn.items():
+        idx = turn_num - 1  # turn 1 → index 0
+        if 0 <= idx < len(hist["stages"]):
+            result[raw_id] = {
+                "turn": turn_num,
+                "stage": hist["stages"][idx],
+                "mode": hist["modes"][idx],
+                "verb": hist["verbs"][idx],
+                "verdict": verdicts[idx] if idx < len(verdicts) else "N/A",
+            }
+    return result
+
+
 def _append_session_ledgers(
     *,
     relationship: str,
@@ -642,12 +697,15 @@ def _append_session_ledgers(
     counterpart_persona: Persona,
     turns: list[Turn],
     source_run: str,
-) -> tuple[list[dict], dict[str, list[str]]]:
+    state: "SessionState",
+) -> tuple[list[dict], dict[str, list[str]], dict[str, dict[str, dict]]]:
     """Append session candidates to raw ledgers.
 
-    Returns (meta_appends, new_raw_ids) where new_raw_ids is
-    {"protagonist": ["imp_045", ...], "counterpart": ["imp_012", ...]}
-    for Composer provenance tracking.
+    Returns (meta_appends, new_raw_ids, state_maps) where:
+    - new_raw_ids: {"protagonist": ["imp_045", ...], "counterpart": ["imp_012", ...]}
+    - state_maps: {"protagonist": {raw_id: state_dict}, "counterpart": {...}}
+
+    state_maps enables Composer to attach source_states to refined drafts.
     Empty buckets skipped (no ledger file created for that side).
     """
     p_candidates = [
@@ -704,4 +762,18 @@ def _append_session_ledgers(
             "new_ledger_version": new_ledger.ledger_version,
         })
 
-    return appends, new_ids
+    # Build raw_id → turn_number maps for each role
+    p_raw_id_to_turn: dict[str, int] = {}
+    for raw_id, (turn_num, _) in zip(new_ids["protagonist"], p_candidates):
+        p_raw_id_to_turn[raw_id] = turn_num
+
+    c_raw_id_to_turn: dict[str, int] = {}
+    for raw_id, (turn_num, _) in zip(new_ids["counterpart"], c_candidates):
+        c_raw_id_to_turn[raw_id] = turn_num
+
+    state_maps: dict[str, dict[str, dict]] = {
+        "protagonist": _build_state_map_for_speaker(state, "protagonist", p_raw_id_to_turn),
+        "counterpart": _build_state_map_for_speaker(state, "counterpart", c_raw_id_to_turn),
+    }
+
+    return appends, new_ids, state_maps

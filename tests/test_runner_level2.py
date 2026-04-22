@@ -135,11 +135,12 @@ def test_second_session_retrieval_hits_first_session_impressions(redirect_all_di
     run_session(config=config, llm_client=MockLLMClient(responses_1))
 
     # Session 2: retrieval should hit session 1's refined
+    # New order: infer first (before retrieval), then extract
     responses_2 = [
-        "- 醫院\n- 父親\n",
-        "- 醫院\n- 父親\n",
-        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",
-        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",  # infer_p (now before retrieval)
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",  # infer_c
+        "- 醫院\n- 父親\n",   # extract_p (retrieval runs after infer)
+        "- 醫院\n- 父親\n",   # extract_c
         "話三",
         _JS, _JS,  # Judge for both after turn 3
         "話四",
@@ -222,9 +223,12 @@ def test_pre_seeded_ledger_hits_system_prompt(redirect_all_dirs):
     )
 
     config = _base_config(max_turns=2)
+    # New order: infer first (before retrieval/extract), then extract
     responses = [
-        "- 手\n- 不動\n",
-        "- 手\n- 不動\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",  # infer_p (before retrieval)
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",  # infer_c
+        "- 手\n- 不動\n",   # extract_p (retrieval runs after infer)
+        "- 手\n- 不動\n",   # extract_c
         "話一",
         _JS, _JS,  # Judge for both after turn 1
         "話二",
@@ -271,9 +275,12 @@ def test_synonym_map_enables_variant_matching(redirect_all_dirs, tmp_path, monke
     )
 
     config = _base_config(max_turns=2)
+    # New order: infer first (before retrieval/extract), then extract
     responses = [
-        "- 愧疚\n",
-        "- 愧疚\n",
+        "STAGE: 前置積累\nMODE: 收\nVERB: 承受\nWHY: init\n",  # infer_p (before retrieval)
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",  # infer_c
+        "- 愧疚\n",   # extract_p (retrieval runs after infer)
+        "- 愧疚\n",   # extract_c
         "話一",
         _JS, _JS,  # Judge for both after turn 1
         "話二",

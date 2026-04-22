@@ -219,6 +219,7 @@ def read_refined_ledger(*, relationship: str, persona_name: str) -> RefinedLedge
                 from_run=i["from_run"],
                 source_raw_ids=list(i.get("source_raw_ids") or []),
                 created=i["created"],
+                source_states=list(i.get("source_states") or []),
             )
             for i in (data.get("impressions") or [])
         ],
@@ -264,6 +265,7 @@ def append_refined_impressions(
             from_run=source_run,
             source_raw_ids=list(draft.source_raw_ids),
             created=now_iso,
+            source_states=list(draft.source_states),
         )
         new_entries.append(entry)
         next_id_num += 1
@@ -321,6 +323,7 @@ def _atomic_write_refined_ledger(ledger: RefinedLedger) -> None:
                 "from_run": e.from_run,
                 "source_raw_ids": list(e.source_raw_ids),
                 "created": e.created,
+                **( {"source_states": list(e.source_states)} if e.source_states else {}),
             }
             for e in ledger.impressions
         ],

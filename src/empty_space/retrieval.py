@@ -172,6 +172,30 @@ from empty_space.schemas import (
 )
 
 
+def _state_bonus(
+    source_states: list[dict],
+    current: dict | None,
+    stage_w: float,
+    mode_w: float,
+    verb_w: float,
+) -> float:
+    """Take the MAX bonus across any source_state (best match wins)."""
+    if not current or not source_states:
+        return 0.0
+    best = 0.0
+    for ss in source_states:
+        b = 0.0
+        if ss.get("stage") == current.get("stage"):
+            b += stage_w
+        if ss.get("mode") == current.get("mode"):
+            b += mode_w
+        if ss.get("verb") == current.get("verb"):
+            b += verb_w
+        if b > best:
+            best = b
+    return best
+
+
 def retrieve_top_n(
     *,
     query_symbols: list[str],
@@ -182,6 +206,10 @@ def retrieve_top_n(
     speaker_b: str,
     persona_name_b: str,
     synonym_map: dict[str, str],
+    current_state: dict | None = None,
+    stage_weight: float = 1.0,
+    mode_weight: float = 0.5,
+    verb_weight: float = 0.5,
     top_n: int = 3,
 ) -> list[RetrievedImpression]:
     """Score entries across two lists. Works with either LedgerEntry (raw)
@@ -189,12 +217,15 @@ def retrieve_top_n(
 
     For entries without from_turn attribute, from_turn is set to None in
     the resulting RetrievedImpression.
+
+    When current_state is provided, impressions whose source_states match the
+    current state receive a state-resonance bonus added to the symbol-match score.
     """
     canon_q = {canonicalize(s, synonym_map) for s in query_symbols}
     if not canon_q:
         return []
 
-    scored: list[tuple[int, str, object, str, str, list[str]]] = []
+    scored: list[tuple[float, str, object, str, str, list[str]]] = []
     # (score, created, entry, speaker, persona_name, matched_sorted)
     for entries, speaker, persona_name in (
         (entries_a, speaker_a, persona_name_a),
@@ -204,8 +235,14 @@ def retrieve_top_n(
             canon_e = {canonicalize(s, synonym_map) for s in entry.symbols}
             matched = canon_q & canon_e
             if matched:
+                source_states = getattr(entry, "source_states", [])
+                bonus = _state_bonus(
+                    source_states, current_state,
+                    stage_weight, mode_weight, verb_weight,
+                )
+                final_score = float(len(matched)) + bonus
                 scored.append((
-                    len(matched),
+                    final_score,
                     entry.created,
                     entry,
                     speaker,
@@ -253,6 +290,7 @@ def run_session_start_retrieval(
     other_persona_name: str,
     synonym_map: dict[str, str],
     llm_client,
+    current_state: dict | None = None,
     top_n: int = 3,
 ) -> RetrievalResult:
     """Full session-start retrieval pipeline for one role.
@@ -264,6 +302,7 @@ def run_session_start_retrieval(
     2. Load only self's refined ledger (B strategy: private memory).
     3. Expand with self's cooccurrence graph (1-hop).
     4. Score refined impressions in self's ledger only, return top N.
+       If current_state provided, impressions whose source_states match get a bonus.
     5. Package as RetrievalResult (with debug info).
     """
     from empty_space.ledger import read_refined_ledger  # local import
@@ -293,6 +332,7 @@ def run_session_start_retrieval(
         speaker_b="counterpart" if speaker_role == "protagonist" else "protagonist",
         persona_name_b=other_persona_name,  # kept for signature consistency; entries_b is empty
         synonym_map=synonym_map,
+        current_state=current_state,
         top_n=top_n,
     )
 

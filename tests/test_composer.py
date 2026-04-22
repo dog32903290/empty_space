@@ -501,3 +501,87 @@ def test_parse_no_fence_unchanged():
     p_drafts, _, err = parse_composer_output(raw, protagonist_name="母親", counterpart_name="兒子")
     assert err is None
     assert p_drafts[0].text == "no fence"
+
+
+# --- Level 4.2: state_maps enrichment ---
+
+from empty_space.composer import _enrich_drafts_with_states
+
+
+def test_enrich_drafts_with_states_attaches_matching_states():
+    """_enrich_drafts_with_states maps source_raw_ids → state_dicts from state_map."""
+    state_map = {
+        "imp_001": {"turn": 1, "stage": "前置積累", "mode": "收", "verb": "承受", "verdict": "N/A"},
+        "imp_002": {"turn": 2, "stage": "初感訊號", "mode": "在", "verb": "迴避", "verdict": "N/A"},
+    }
+    drafts = [
+        RefinedImpressionDraft(text="x", symbols=["a"], source_raw_ids=["imp_001", "imp_002"]),
+        RefinedImpressionDraft(text="y", symbols=["b"], source_raw_ids=["imp_999"]),  # not in map
+    ]
+    enriched = _enrich_drafts_with_states(drafts, state_map)
+
+    assert len(enriched) == 2
+    # First draft: both ids in map
+    assert len(enriched[0].source_states) == 2
+    assert enriched[0].source_states[0]["turn"] == 1
+    assert enriched[0].source_states[1]["stage"] == "初感訊號"
+    # Second draft: id not in map → empty
+    assert enriched[1].source_states == []
+
+
+def test_enrich_drafts_empty_state_map():
+    """Empty state_map → all drafts get empty source_states."""
+    drafts = [
+        RefinedImpressionDraft(text="x", symbols=["a"], source_raw_ids=["imp_001"]),
+    ]
+    enriched = _enrich_drafts_with_states(drafts, {})
+    assert enriched[0].source_states == []
+
+
+def test_run_composer_enriches_drafts_with_source_states(tmp_path, monkeypatch):
+    """state_maps passed to run_composer → refined drafts carry source_states in ledger."""
+    monkeypatch.setattr("empty_space.ledger.LEDGERS_DIR", tmp_path / "ledgers")
+    out_dir = tmp_path / "run_out"
+    out_dir.mkdir()
+    (out_dir / "conversation.md").write_text(
+        "**Turn 1 · 母親**\n你回來了。\n", encoding="utf-8",
+    )
+
+    state_maps = {
+        "protagonist": {
+            "imp_001": {"turn": 1, "stage": "初感訊號", "mode": "收", "verb": "承受", "verdict": "N/A"},
+        },
+        "counterpart": {},
+    }
+
+    client = _MockLLMForComposer(response_text="""母親:
+  - text: "state attached"
+    symbols: [手]
+    source_raw_ids: [imp_001]
+
+兒子: []
+""")
+
+    result = run_composer(
+        relationship="母親_x_兒子",
+        protagonist_name="母親",
+        counterpart_name="兒子",
+        out_dir=out_dir,
+        session_turns=[],
+        new_raw_ids={"protagonist": ["imp_001"], "counterpart": []},
+        source_run="exp/t",
+        llm_client=client,
+        state_maps=state_maps,
+    )
+
+    assert result.parse_error is None
+    assert result.protagonist_refined_added == 1
+
+    # Verify source_states written to ledger
+    p_ledger = read_refined_ledger(relationship="母親_x_兒子", persona_name="母親")
+    assert len(p_ledger.impressions) == 1
+    imp = p_ledger.impressions[0]
+    assert len(imp.source_states) == 1
+    ss = imp.source_states[0]
+    assert ss["stage"] == "初感訊號"
+    assert ss["turn"] == 1

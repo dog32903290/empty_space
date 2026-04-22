@@ -318,6 +318,25 @@ def _format_refined_list(refined) -> str:
     return "\n".join(lines)
 
 
+def _enrich_drafts_with_states(
+    drafts: list[RefinedImpressionDraft],
+    state_map: dict[str, dict],
+) -> list[RefinedImpressionDraft]:
+    """For each draft, look up source_states from state_map via source_raw_ids."""
+    enriched = []
+    for draft in drafts:
+        source_states = [
+            state_map[rid] for rid in draft.source_raw_ids if rid in state_map
+        ]
+        enriched.append(RefinedImpressionDraft(
+            text=draft.text,
+            symbols=draft.symbols,
+            source_raw_ids=draft.source_raw_ids,
+            source_states=source_states,
+        ))
+    return enriched
+
+
 def run_composer(
     *,
     relationship: str,
@@ -328,6 +347,7 @@ def run_composer(
     new_raw_ids: dict[str, list[str]],
     source_run: str,
     llm_client,
+    state_maps: dict[str, dict[str, dict]] | None = None,
 ) -> ComposerSessionResult:
     """Top-level Composer orchestrator. Called by runner at session end.
 
@@ -336,7 +356,11 @@ def run_composer(
 
     On success: produces 0-6 refined impressions per speaker, appends to
     two refined ledgers, returns counts and tokens for meta.yaml.
+
+    state_maps: optional {"protagonist": {raw_id: state_dict}, "counterpart": {...}}
+    When provided, enriches each refined draft with source_states metadata.
     """
+    state_maps = state_maps or {"protagonist": {}, "counterpart": {}}
     try:
         # 1. Gather input
         input_bundle = gather_composer_input(
@@ -360,6 +384,10 @@ def run_composer(
             protagonist_name=protagonist_name,
             counterpart_name=counterpart_name,
         )
+
+        # 4b. Enrich drafts with source_states from state_maps
+        p_drafts = _enrich_drafts_with_states(p_drafts, state_maps.get("protagonist", {}))
+        c_drafts = _enrich_drafts_with_states(c_drafts, state_maps.get("counterpart", {}))
 
         # 5. Append to two ledgers
         append_refined_impressions(

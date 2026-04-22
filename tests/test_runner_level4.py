@@ -428,3 +428,130 @@ def test_peak_priority_fire_beats_basin(monkeypatch):
     run_session(config=config, llm_client=client, interactive=True)
 
     assert captured["triggered_by"] == "fire_release on counterpart"
+
+
+# --- Level 4.2: session-start order and state-resonance ---
+
+def test_init_judge_state_runs_before_retrieval():
+    """Verify call order: infer_p and infer_c come BEFORE extract_p and extract_c.
+
+    Infer calls contain '現在場景還沒開演' (infer-phase keyword).
+    Extract calls go to Flash for a YAML list.
+    With the reordering, infer indices (0,1) precede extract indices (2,3).
+    """
+    responses = [
+        # 0,1: infer_p, infer_c (now run BEFORE retrieval)
+        "STAGE: 初感訊號\nMODE: 收\nVERB: 承受（等待）\nWHY: init\n",
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
+        # 2,3: extract_p, extract_c (retrieval runs AFTER infer)
+        "- 醫院\n",
+        "- 醫院\n",
+        # 4,5,6: turn1 dialogue + 2 judge calls
+        "話1",
+        "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        # 7,8,9: turn2 + 2 judge
+        "話2",
+        "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        # 10: composer
+        "母親: []\n兒子: []\n",
+    ]
+    config = _base_config(max_turns=2)
+    client = MockLLMClient(responses)
+    run_session(config=config, llm_client=client)
+
+    # Verify call order: infer first (現在場景還沒開演), then extract (no special keyword)
+    infer_calls = [(i, c) for i, c in enumerate(client.calls) if "現在場景還沒開演" in c["system"]]
+    flash_extract_calls = [
+        (i, c) for i, c in enumerate(client.calls)
+        if "感受符號" in c["system"] and "現在場景還沒開演" not in c["system"]
+        and "隱性量測者" not in c["system"]
+    ]
+
+    assert len(infer_calls) == 2
+    assert len(flash_extract_calls) == 2
+
+    # All infer indices must be LESS than all extract indices
+    max_infer_idx = max(i for i, _ in infer_calls)
+    min_extract_idx = min(i for i, _ in flash_extract_calls)
+    assert max_infer_idx < min_extract_idx, (
+        f"infer must complete before extract: max_infer={max_infer_idx}, min_extract={min_extract_idx}"
+    )
+
+
+def test_session_start_retrieval_receives_inferred_state(redirect_all_dirs):
+    """After reordering, retrieval uses the inferred state for state-resonance scoring.
+
+    Session 1 produces a refined impression with source_state matching '初感訊號/收/承受'.
+    Session 2 infers '初感訊號/收/承受' for protagonist, then retrieval boosts that impression.
+    We verify the impression appears in retrieval.yaml (it ranked first due to bonus).
+    """
+    from empty_space.ledger import append_refined_impressions
+    from empty_space.schemas import RefinedImpressionDraft
+
+    ledgers_dir = redirect_all_dirs["ledgers_dir"]
+
+    # Pre-seed protagonist's refined ledger with two impressions:
+    # ref_001: source_state matches 初感訊號/收/承受 + symbol 醫院
+    # ref_002: source_state is 前置積累/在 + symbol 醫院
+    append_refined_impressions(
+        relationship="母親_x_兒子",
+        speaker_role="protagonist",
+        persona_name="母親",
+        drafts=[
+            RefinedImpressionDraft(
+                text="初感訊號時的記憶",
+                symbols=["醫院"],
+                source_raw_ids=["imp_001"],
+                source_states=[{
+                    "turn": 2, "stage": "初感訊號", "mode": "收",
+                    "verb": "承受", "verdict": "N/A",
+                }],
+            ),
+            RefinedImpressionDraft(
+                text="前置積累時的記憶",
+                symbols=["醫院"],
+                source_raw_ids=["imp_002"],
+                source_states=[{
+                    "turn": 1, "stage": "前置積累", "mode": "在",
+                    "verb": "迴避", "verdict": "N/A",
+                }],
+            ),
+        ],
+        source_run="prev/t",
+    )
+
+    # Session 2: infer produces 初感訊號/收/承受 for protagonist, then retrieval runs
+    responses = [
+        # 0: infer_p → 初感訊號/收/承受 (this is what retrieval will use as current_state)
+        "STAGE: 初感訊號\nMODE: 收\nVERB: 承受\nWHY: init\n",
+        # 1: infer_c
+        "STAGE: 前置積累\nMODE: 在\nVERB: 迴避\nWHY: init\n",
+        # 2,3: extract_p, extract_c (retrieval queries)
+        "- 醫院\n",   # extract_p returns 醫院 → matches both impressions
+        "- 醫院\n",   # extract_c
+        # 4,5,6: turn 1 + judges
+        "話一",
+        "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        # 7,8,9: turn 2 + judges
+        "話二",
+        "STAGE: 初感訊號\nMODE: 收\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        "STAGE: 前置積累\nMODE: 在\nWHY: x\nVERDICT: N/A\nHITS: -\n",
+        # 10: composer
+        "母親: []\n兒子: []\n",
+    ]
+
+    config = _base_config(max_turns=2)
+    client = MockLLMClient(responses)
+    result = run_session(config=config, llm_client=client)
+
+    import yaml
+    retrieval = yaml.safe_load((result.out_dir / "retrieval.yaml").read_text(encoding="utf-8"))
+    p_impressions = retrieval["protagonist"]["impressions"]
+
+    # Both impressions match symbol 醫院, but ref_001 (初感訊號/收/承受) matches current state
+    # → ref_001 should rank first due to state-resonance bonus
+    assert len(p_impressions) >= 1
+    assert p_impressions[0]["text"] == "初感訊號時的記憶"

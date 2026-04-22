@@ -613,3 +613,158 @@ def test_run_session_start_retrieval_private_memory_does_not_leak(tmp_path, monk
 
     # B strategy: protagonist's own ledger is empty, so no impressions
     assert result.impressions == []
+
+
+# --- Level 4.2: state-resonance scoring ---
+
+def _make_refined_with_states(
+    id: str,
+    text: str,
+    symbols: list[str],
+    source_states: list[dict] | None = None,
+    created: str = "2026-04-22T10:00:00Z",
+) -> RefinedImpression:
+    return RefinedImpression(
+        id=id, text=text, symbols=symbols,
+        speaker="protagonist", persona_name="母親",
+        from_run="r/t", source_raw_ids=[],
+        created=created,
+        source_states=source_states or [],
+    )
+
+
+def test_retrieve_top_n_state_bonus_boosts_matching_impression():
+    """Two impressions match the same symbols; the one with matching source_state ranks first."""
+    current_state = {"stage": "初感訊號", "mode": "收", "verb": "承受"}
+
+    # Both match symbol "A"; ref_001 has a source_state matching current_state
+    ref_with_match = _make_refined_with_states(
+        "ref_001", "state matches", ["A"],
+        source_states=[{"stage": "初感訊號", "mode": "收", "verb": "承受", "verdict": "N/A", "turn": 2}],
+        created="2026-04-22T10:00:00Z",
+    )
+    ref_without_match = _make_refined_with_states(
+        "ref_002", "no state match", ["A"],
+        source_states=[{"stage": "前置積累", "mode": "在", "verb": "迴避", "verdict": "N/A", "turn": 1}],
+        created="2026-04-22T10:00:00Z",  # same created timestamp
+    )
+
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        entries_a=[ref_with_match, ref_without_match],
+        entries_b=[],
+        speaker_a="protagonist",
+        persona_name_a="母親",
+        speaker_b="counterpart",
+        persona_name_b="兒子",
+        synonym_map={},
+        current_state=current_state,
+        top_n=3,
+    )
+
+    assert len(result) == 2
+    # ref_001 should rank first (state bonus: 1.0 stage + 0.5 mode + 0.5 verb = 2.0 over symbol score 1.0)
+    assert result[0].id == "ref_001"
+    assert result[0].score > result[1].score
+    assert result[1].id == "ref_002"
+
+
+def test_retrieve_top_n_no_bonus_when_current_state_none():
+    """Without current_state, scoring reduces to symbol-only (no bonus)."""
+    ref_with_states = _make_refined_with_states(
+        "ref_001", "has states", ["A"],
+        source_states=[{"stage": "初感訊號", "mode": "收", "verb": "承受", "verdict": "N/A", "turn": 1}],
+    )
+    ref_no_states = _make_refined_with_states(
+        "ref_002", "no states", ["A"],
+        source_states=[],
+    )
+
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        entries_a=[ref_with_states, ref_no_states],
+        entries_b=[],
+        speaker_a="protagonist",
+        persona_name_a="母親",
+        speaker_b="counterpart",
+        persona_name_b="兒子",
+        synonym_map={},
+        current_state=None,  # no current_state
+        top_n=3,
+    )
+
+    assert len(result) == 2
+    # Both get score 1.0 (symbol match only, no bonus)
+    assert result[0].score == 1.0
+    assert result[1].score == 1.0
+
+
+def test_state_bonus_partial_match():
+    """Only stage matches → bonus = stage_weight = 1.0 (not full 2.0)."""
+    current_state = {"stage": "初感訊號", "mode": "收", "verb": "承受"}
+    ref = _make_refined_with_states(
+        "ref_001", "only stage", ["A"],
+        source_states=[{"stage": "初感訊號", "mode": "放", "verb": "拒絕", "verdict": "N/A", "turn": 1}],
+    )
+
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        entries_a=[ref],
+        entries_b=[],
+        speaker_a="protagonist",
+        persona_name_a="母親",
+        speaker_b="counterpart",
+        persona_name_b="兒子",
+        synonym_map={},
+        current_state=current_state,
+        top_n=1,
+    )
+
+    assert len(result) == 1
+    # score = 1 (symbol) + 1.0 (stage match only) = 2.0
+    assert result[0].score == 2.0
+
+
+def test_state_bonus_max_across_source_states():
+    """When multiple source_states exist, the best match wins."""
+    current_state = {"stage": "初感訊號", "mode": "收", "verb": "承受"}
+    ref = _make_refined_with_states(
+        "ref_001", "multi states", ["A"],
+        source_states=[
+            {"stage": "前置積累", "mode": "在", "verb": "迴避", "verdict": "N/A", "turn": 1},  # no match
+            {"stage": "初感訊號", "mode": "收", "verb": "承受", "verdict": "N/A", "turn": 3},  # full match
+        ],
+    )
+
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        entries_a=[ref],
+        entries_b=[],
+        speaker_a="protagonist",
+        persona_name_a="母親",
+        speaker_b="counterpart",
+        persona_name_b="兒子",
+        synonym_map={},
+        current_state=current_state,
+        top_n=1,
+    )
+
+    # Full bonus from best source_state: 1 + 1.0 + 0.5 + 0.5 = 3.0
+    assert result[0].score == 3.0
+
+
+def test_retrieve_top_n_score_is_float():
+    """RetrievedImpression.score is float (even with no state bonus)."""
+    ref = _make_refined_with_states("ref_001", "x", ["A"])
+    result = retrieve_top_n(
+        query_symbols=["A"],
+        entries_a=[ref],
+        entries_b=[],
+        speaker_a="protagonist",
+        persona_name_a="母親",
+        speaker_b="counterpart",
+        persona_name_b="兒子",
+        synonym_map={},
+        top_n=1,
+    )
+    assert isinstance(result[0].score, float)
