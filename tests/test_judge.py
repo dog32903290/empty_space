@@ -177,3 +177,112 @@ def test_apply_appends_move_history():
         proposed_mode="在", proposed_verdict="N/A",
     )
     assert new.move_history == ["stay", "advance", "stay"]
+
+
+from empty_space.judge import parse_judge_output
+
+
+def test_parse_judge_output_happy_path():
+    text = """STAGE: 初感訊號
+MODE: 收
+WHY: 母親縮肩且答話變短
+VERDICT: N/A
+HITS: 肩往下; 「嗯。」; 沉默 4 秒
+"""
+    last = _state(stage="前置積累", mode="在")
+    r = parse_judge_output(text, last_state=last)
+    assert r.proposed_stage == "初感訊號"
+    assert r.proposed_mode == "收"
+    assert r.proposed_verdict == "N/A"
+    assert r.why == "母親縮肩且答話變短"
+    assert r.hits == ["肩往下", "「嗯。」", "沉默 4 秒"]
+    assert r.meta["parse_status"] == "ok"
+
+
+def test_parse_judge_output_full_width_colons():
+    text = """STAGE：初感訊號
+MODE：收
+WHY：母親縮肩
+VERDICT：N/A
+HITS：line1
+"""
+    last = _state()
+    r = parse_judge_output(text, last_state=last)
+    assert r.proposed_stage == "初感訊號"
+    assert r.proposed_mode == "收"
+    assert r.why == "母親縮肩"
+
+
+def test_parse_judge_output_preamble_ignored():
+    text = """好的，我來判斷：
+
+STAGE: 前置積累
+MODE: 在
+WHY: 對話剛開始
+VERDICT: N/A
+HITS: -
+"""
+    last = _state()
+    r = parse_judge_output(text, last_state=last)
+    assert r.proposed_stage == "前置積累"
+    assert r.proposed_mode == "在"
+
+
+def test_parse_judge_output_stage_fuzzy_match():
+    text = """STAGE: 明確切換期
+MODE: 放
+WHY: 爆發
+VERDICT: fire_release
+HITS: line1
+"""
+    last = _state()
+    r = parse_judge_output(text, last_state=last)
+    # Fuzzy substring match → 明確切換
+    assert r.proposed_stage == "明確切換"
+
+
+def test_parse_judge_output_missing_hits_line():
+    text = """STAGE: 前置積累
+MODE: 收
+WHY: 沒線索
+VERDICT: N/A
+"""
+    last = _state()
+    r = parse_judge_output(text, last_state=last)
+    assert r.hits == []
+    assert r.meta["parse_status"] in ("ok", "partial")
+
+
+def test_parse_judge_output_totally_broken_falls_back():
+    text = "the model said nothing useful"
+    last = _state(stage="半意識浮現", mode="收")
+    r = parse_judge_output(text, last_state=last)
+    # Everything falls back to last_state
+    assert r.proposed_stage == "半意識浮現"
+    assert r.proposed_mode == "收"
+    assert r.proposed_verdict == "N/A"
+    assert r.meta["parse_status"] == "fallback_used"
+
+
+def test_parse_judge_output_unknown_mode_falls_back():
+    text = """STAGE: 前置積累
+MODE: 壓抑
+WHY: mode 詞彙錯
+VERDICT: N/A
+HITS: x
+"""
+    last = _state(stage="前置積累", mode="收")
+    r = parse_judge_output(text, last_state=last)
+    assert r.proposed_mode == "收"   # fallback
+
+
+def test_parse_judge_output_unknown_verdict_becomes_na():
+    text = """STAGE: 前置積累
+MODE: 收
+WHY: x
+VERDICT: ignition
+HITS: x
+"""
+    last = _state()
+    r = parse_judge_output(text, last_state=last)
+    assert r.proposed_verdict == "N/A"

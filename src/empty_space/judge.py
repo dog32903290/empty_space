@@ -8,7 +8,7 @@ Design:
 """
 from __future__ import annotations
 
-from empty_space.schemas import JudgeState
+from empty_space.schemas import JudgeResult, JudgeState
 
 STAGE_ORDER: list[str] = [
     "前置積累",
@@ -127,6 +127,106 @@ def _build_new_state(
         verdict_history=last_state.verdict_history + [verdict],
         hits_history=last_state.hits_history + [new_hits],
     )
+
+
+# --- YAML parsers for persona v3 files ---
+
+# --- tolerant output parser ---
+
+_VERDICT_VALUES = {"fire_release", "basin_lock", "N/A"}
+
+
+def parse_judge_output(text: str, *, last_state: JudgeState) -> JudgeResult:
+    """Parse Flash's 5-line output tolerantly.
+
+    Expected format:
+        STAGE: <stage 名>
+        MODE: <mode 名>
+        WHY: <一句>
+        VERDICT: <fire_release | basin_lock | N/A>
+        HITS: <line1; line2; line3>
+
+    Tolerances:
+    - Full-width colons (：) accepted
+    - Preamble lines (not matching any field) are skipped
+    - Stage/mode name substring/superstring of a canonical name → fuzzy match
+    - Missing field → fallback to last_state (and mark parse_status)
+    - Completely unparseable → fallback_used for all fields
+    """
+    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+
+    raw_stage = _extract_field(lines, ["STAGE:", "STAGE：", "階段:", "階段："])
+    raw_mode = _extract_field(lines, ["MODE:", "MODE：", "模式:", "模式："])
+    raw_verdict = _extract_field(lines, ["VERDICT:", "VERDICT："])
+    raw_why = _extract_field(lines, ["WHY:", "WHY：", "為什麼:", "為什麼："])
+    raw_hits = _extract_field(lines, ["HITS:", "HITS："])
+
+    found_any = any(v is not None for v in (raw_stage, raw_mode, raw_verdict, raw_why, raw_hits))
+    parse_status = "ok" if found_any else "fallback_used"
+
+    stage = _normalise_stage(raw_stage or "", last_state.stage)
+    mode = _normalise_mode(raw_mode or "", last_state.mode)
+    verdict = _normalise_verdict(raw_verdict or "")
+    why = (raw_why or "").strip()
+    hits = _parse_hits(raw_hits or "")
+
+    # If we got some fields but not all, mark partial
+    if found_any and (raw_stage is None or raw_mode is None or raw_verdict is None):
+        parse_status = "partial"
+
+    return JudgeResult(
+        proposed_stage=stage,
+        proposed_mode=mode,
+        proposed_verdict=verdict,
+        why=why,
+        hits=hits,
+        meta={"parse_status": parse_status},
+    )
+
+
+def _extract_field(lines: list[str], prefixes: list[str]) -> str | None:
+    """Return the first line's content after any matching prefix, or None."""
+    for line in lines:
+        for p in prefixes:
+            if line.startswith(p):
+                return line[len(p):].strip()
+    return None
+
+
+def _normalise_stage(raw: str, fallback: str) -> str:
+    """Fuzzy match to STAGE_ORDER. Exact match preferred; then substring both ways."""
+    if raw in STAGE_ORDER:
+        return raw
+    for s in STAGE_ORDER:
+        if s in raw or (raw and raw in s):
+            return s
+    return fallback
+
+
+def _normalise_mode(raw: str, fallback: str) -> str:
+    """Exact match to MODES (收/放/在). If the raw contains one of them as a char, accept."""
+    if raw in MODES:
+        return raw
+    for m in MODES:
+        if m in raw:
+            return m
+    return fallback
+
+
+def _normalise_verdict(raw: str) -> str:
+    """Only accept one of the three canonical verdicts; else N/A."""
+    for v in _VERDICT_VALUES:
+        if v in raw:
+            return v
+    return "N/A"
+
+
+def _parse_hits(raw: str) -> list[str]:
+    """Split HITS by ';' (半形) or '；' (全形). Empty and placeholder '-' filtered."""
+    if not raw:
+        return []
+    parts = [p.strip() for chunk in raw.split(";") for p in chunk.split("；")]
+    return [p for p in parts if p and p != "-"]
 
 
 # --- YAML parsers for persona v3 files ---
