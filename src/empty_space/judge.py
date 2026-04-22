@@ -260,8 +260,9 @@ _JUDGE_SYSTEM_PROMPT = """\
   - 放：往外釋放、爆發、哭、笑、吼
   - 在：既不收也不放，只是存在、觀察、呼吸
 - VERDICT 標記特殊事件：
-  - fire_release：角色剛剛發生了明顯的情緒釋放
-  - basin_lock：角色進入穩態盆地（stage=穩定期/回溫期 且連續 2 輪以上不動）
+  - **若 persona 原則裡有 verdict_calibration 區塊，以該區塊的 signature / counterexamples 為最高準則**，而不是你的通用直覺。每個角色的 fire_release / basin_lock 門檻是他個性的一環，不要套絕對標準。
+  - fire_release：對這個角色的個人尺度上剛剛發生了質變的情緒釋放
+  - basin_lock：對這個角色來說真正進入了無動靜的穩態盆地（身體和語言都沒新信號）
   - N/A：其他情況
 - HITS 是你觀察到的具體線索
 
